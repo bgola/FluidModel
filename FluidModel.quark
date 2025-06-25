@@ -1,0 +1,11 @@
+(
+	\name: "FluidModel",
+	\path: "FluidModel",
+	\summary: "",
+	\author: "Bruno Gola",
+	\version: 0.1,
+	\since: "2025",
+	\dependencies: [
+		"FluCoMa"
+	]
+)
