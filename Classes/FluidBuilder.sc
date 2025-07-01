@@ -30,7 +30,7 @@ FluidModel {
 	init {
 		s = Server.default;
 		this.slicer = FluidModelSlicer.default();
-		datasets = (mfcc: nil, chroma: nil, pitch: nil, spectralShape: nil, loudness: nil);
+		datasets = (mfcc: 0, chroma: 0, pitch: 0, spectralShape: 0, loudness: 0, durations: 0);
 		durations = [];
 	}
 
@@ -213,12 +213,15 @@ FluidModel {
 		fork {
 			var dumps=();
 			var c = Condition.new;
-			datasets.keys.do {|key|
+			datasets.keys.do {|key,idx|
 				c.test=false;
+				"exporting %: %/%".format(key, idx, datasets.size).postln;
 				datasets[key].dump {arg data;
+					"   copying data...".post;
 					if (data["data"].isEmpty.not) {
 						dumps[key] = data["data"];
 					};
+					"done".postln;
 					c.test=true;
 					c.signal;
 				};
@@ -331,7 +334,7 @@ FluidModel {
 		datasets.keys.do {|key|
 			datasets[key] = FluidDataSet(s).read(path +/+ "%_%_dataset.json".format(key, name));
 		};
-		scaler = FluidRobustScale(s).read(path +/+  "%_scaler.json".format(name));
+		scaler = FluidNormalize(s, -1, 1).read(path +/+  "%_scaler.json".format(name));
 		kdtree = FluidKDTree(s).read(path +/+  "%_kdtree.json".format(name));
 		scaled_dataset = FluidDataSet(s).read(path +/+  "%_scaled_dataset.json".format(name));
 		lookup = FluidDataSet(s).read(path +/+  "%_lookup.json".format(name));
