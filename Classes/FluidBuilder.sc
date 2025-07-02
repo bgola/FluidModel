@@ -235,7 +235,9 @@ FluidModel {
 				dumps.keys.do {|dkey|
 					slice_data[dkey] = dumps[dkey][key];
 				};
-				slice_data['chromaClass'] = slice_data.chroma.maxIndex;
+				if (slice_data[\chroma].notNil) {
+					slice_data['chromaClass'] = slice_data.chroma.maxIndex;
+				};
 				slices_export[sliceidx] = slice_data;
 			};
 		};
