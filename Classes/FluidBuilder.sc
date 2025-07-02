@@ -308,7 +308,7 @@ FluidModel {
 			};
 		}
 	}
-thisProcess.nowExecutingPath.dirname
+
 	store { arg path;
 		var model = this;
 		var name = path.basename;
