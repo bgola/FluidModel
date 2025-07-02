@@ -209,7 +209,7 @@ FluidModel {
 
 
 	export {
-		var nslices = slices.numFrames;
+		var nslices = slices.numFrames-1;
 		var slices_export = nil!nslices;
 		fork {
 			var dumps=();
