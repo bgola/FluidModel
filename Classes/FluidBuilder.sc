@@ -30,7 +30,7 @@ FluidModel {
 	init {
 		s = Server.default;
 		this.slicer = FluidModelSlicer.default();
-		datasets = (mfcc: 0, chroma: 0, pitch: 0, spectralShape: 0, loudness: 0, durations: 0);
+		datasets = (mfcc: 0, chroma: 0, pitch: 0, spectralShape: 0, loudness: 0, duration: 0);
 		durations = [];
 	}
 
@@ -190,11 +190,12 @@ FluidModel {
 					dur_buf.set(0, num_frames/mono.sampleRate);
 					dur_buf.set(1, start_frame);
 					dur_buf.set(2, end_frame);
+					s.sync;
 					durationDS.addPoint("slice-%".format(slice_index),dur_buf);
 					duration = [num_frames/mono.sampleRate, start_frame, end_frame];
 					durations = durations.add(duration);
 					s.sync;
-					if((slice_index % 100) == 99){s.sync};
+					//if((slice_index % 100) == 99){s.sync};
 				};
 				s.sync;
 				"Done with analysis".postln;
@@ -215,7 +216,7 @@ FluidModel {
 			var c = Condition.new;
 			datasets.keys.do {|key,idx|
 				c.test=false;
-				"exporting %: %/%".format(key, idx, datasets.size).postln;
+				"exporting %: %/%".format(key, idx+1, datasets.size).postln;
 				datasets[key].dump {arg data;
 					"   copying data...".post;
 					if (data["data"].isEmpty.not) {
@@ -234,6 +235,7 @@ FluidModel {
 				dumps.keys.do {|dkey|
 					slice_data[dkey] = dumps[dkey][key];
 				};
+				slice_data['chromaClass'] = slice_data.chroma.maxIndex;
 				slices_export[sliceidx] = slice_data;
 			};
 		};
@@ -306,7 +308,7 @@ FluidModel {
 			};
 		}
 	}
-
+thisProcess.nowExecutingPath.dirname
 	store { arg path;
 		var model = this;
 		var name = path.basename;
