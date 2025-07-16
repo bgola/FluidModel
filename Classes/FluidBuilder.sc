@@ -19,7 +19,8 @@ FluidSKMeans
 */
 
 FluidModel {
-	var <buffer, <monos, <loader, <mono, <slices, <dataset, <scaler, <kdtree, <scaled_dataset, <lookup, <folder, <datasets;
+	var <buffer, <monos, <loader, <mono, <slices, <dataset, <scaler, <kdtree;
+	var <scaled_dataset, <lookup, <folder, <datasets, <labelset;
 	var <>slicer, <durations;
 	var <s, cond;
 
@@ -30,7 +31,7 @@ FluidModel {
 	init {
 		s = Server.default;
 		this.slicer = FluidModelSlicer.default();
-		datasets = (mfcc: 0, chroma: 0, pitch: 0, spectralShape: 0, loudness: 0, duration: 0);
+		datasets = (mfcc: 0, chroma: 0, pitch: 0, spectralShape: 0, loudness: 0, duration: 0, merged: 0);
 		durations = [];
 	}
 
@@ -111,7 +112,6 @@ FluidModel {
 
 	slice {
 		var indices = Buffer(s);
-		//FluidBufOnsetSlice.processBlocking(s,~source_buf,indices:~source_indices_buf,metric:9,threshold:0.2,minSliceLength:9,action:{
 		var c = Condition.new();
 		var action = {
 			indices.loadToFloatArray(action:{ arg indices_array;
@@ -123,22 +123,16 @@ FluidModel {
 		};
 
 		"Slicing...".postln;
-		//FluidBufOnsetSlice.processBlocking(s,buffer,indices:indices,metric:9,threshold:0.5,minSliceLength:9,action:{
-		//FluidBufNoveltySlice.processBlocking(s,buffer,indices:indices, algorithm: 1,threshold:0.25,kernelSize: 15, minSliceLength:3,action:{
-		//	indices.loadToFloatArray(action:action)
-		//});
-
 		this.slicer.slice(mono, indices, action: action);
 		c.wait;
 		^indices;
 	}
 
-
 	analyze {
 		var features_buf = {Buffer(s)}!5;
 		var stats_buf = {Buffer(s)}!5;
 		var flat_buf = {Buffer(s)}!5;
-		var dur_buf = Buffer.alloc(s, 3);
+		var dur_buf = Buffer.alloc(s, 5);
 		var duration = [];
 
 		var mfccDS = FluidDataSet(s);
@@ -151,6 +145,9 @@ FluidModel {
 		var c = Condition.new();
 		var datasets = (mfcc: mfccDS, chroma: chromaDS, pitch: pitchDS, spectralShape: spectralshapeDS,
 			loudness: loudnessDS, duration: durationDS);
+		var current_file = 0;
+
+		labelset = FluidLabelSet(s);
 
 		"Starting analysis".postln;
 
@@ -161,6 +158,9 @@ FluidModel {
 				slices_array.doAdjacentPairs{
 					arg start_frame, end_frame, slice_index;
 					var num_frames = end_frame - start_frame;
+					if (start_frame > loader.index[loader.files[current_file].path.basename.asSymbol][\bounds][1]) {
+						current_file = current_file + 1;
+					};
 					"analyzing slice: % / %".format(slice_index + 1,slices_array.size - 1).postln;
 					FluidBufMFCC.processBlocking(s,mono,start_frame,num_frames,features: features_buf[0],startCoeff:1,numCoeffs:13);
 					FluidBufStats.processBlocking(s,features_buf[0],stats:stats_buf[0],select:[\mean]);
@@ -190,10 +190,14 @@ FluidModel {
 					dur_buf.set(0, num_frames/mono.sampleRate);
 					dur_buf.set(1, start_frame);
 					dur_buf.set(2, end_frame);
+					dur_buf.set(3, slice_index);
+					dur_buf.set(4, current_file);
 					s.sync;
+
 					durationDS.addPoint("slice-%".format(slice_index),dur_buf);
 					duration = [num_frames/mono.sampleRate, start_frame, end_frame];
 					durations = durations.add(duration);
+					labelset.addLabel("slice-%".format(slice_index), loader.files[current_file].path.basename.asSymbol);
 					s.sync;
 					//if((slice_index % 100) == 99){s.sync};
 				};
@@ -204,9 +208,44 @@ FluidModel {
 			};
 		});
 		c.wait;
+
 		^datasets;
 	}
 
+	mergeDatasets {
+		var query = FluidDataSetQuery(s);
+		var c = Condition.new;
+		var normalize, keys, cols, ds;
+		keys = datasets.keys.reject {|ds| ds == \merged }.asArray;
+		datasets.merged = FluidDataSet(s);
+		ds = keys[0].postln;
+		c.test = false;
+		datasets[ds].cols({|ncols| cols = ncols; c.test=true; c.signal });
+		c.wait;
+		c.test = false;
+		query.addRange(0, (cols).postln, {c.test=true; c.signal});
+		c.wait;
+		c.test = false;
+		query.transform(datasets[ds], datasets.merged, {c.test=true; c.signal});
+		c.wait;
+		c.test = false;
+		keys[1..].do {|ds|
+			query.free;
+			query = FluidDataSetQuery(s);
+			c.test=false;
+			datasets[ds.postln].cols({|ncols| cols = ncols; c.test=true; c.signal });
+			c.wait;
+			c.test = false;
+			query.addRange(0, (cols).postln, {c.test=true; c.signal});
+			c.wait;
+			c.test = false;
+			query.transformJoin(datasets[ds], datasets.merged, datasets.merged, {c.test=true; c.signal});
+			c.wait;
+			c.test = false;
+		};
+		//FluidNormalize(s).fitTransform(datasets.merged, datasets.merged, {c.test=true; c.signal});
+		//c.wait;
+	}
 
 	export {
 		var nslices = slices.numFrames-1;
@@ -253,17 +292,15 @@ FluidModel {
 		var c = Condition.new();
 
 		//scaler = FluidStandardize(s);
-		scaler = FluidNormalize(s, -1, 1);
+		//scaler = FluidNormalize(s, -1, 1);
 		//scaler = FluidRobustScale(s);
 
 		"Fitting KDTree".postln;
-		scaler.fitTransform(datasets.mfcc,scaled_dataset, {
-			"scaled...".postln;
-			kdtree.fit(scaled_dataset,{
-				"kdtree is fit".postln;
-				c.test = true;
-				c.signal;
-			});
+
+		kdtree.fit(datasets.merged,{
+			"kdtree is fit".postln;
+			c.test = true;
+			c.signal;
 		});
 		c.wait;
 		^[scaler, kdtree, scaled_dataset];
@@ -298,6 +335,7 @@ FluidModel {
 			this.analyze.keysValuesDo {|key, value|
 				datasets[key] = value;
 			};
+			this.mergeDatasets;
 
 			scaler_tree = this.fitKDTree;
 
@@ -327,7 +365,7 @@ FluidModel {
 		model.lookup.write(path +/+  "%_lookup.json".format(name));
 	}
 
-	load { arg path;
+	load { arg path, loadDatasets=true;
 		var name = path.basename;
 		buffer = Buffer.read(s, path +/+ "%.aiff".format(name));
 		monos = [nil,nil];
@@ -335,13 +373,15 @@ FluidModel {
 		monos[1] = Buffer.readChannel(s, path +/+ "%.aiff".format(name), channels:[1]);
 		mono = Buffer.read(s, path +/+ "%_mono.aiff".format(name));
 		slices = Buffer.read(s, path +/+ "%_slices.aiff".format(name));
-		datasets.keys.do {|key|
-			datasets[key] = FluidDataSet(s).read(path +/+ "%_%_dataset.json".format(key, name));
+		if (loadDatasets) {
+			datasets.keys.do {|key|
+				datasets[key] = FluidDataSet(s).read(path +/+ "%_%_dataset.json".format(key, name));
+			};
+			scaler = FluidNormalize(s, -1, 1).read(path +/+  "%_scaler.json".format(name));
+			kdtree = FluidKDTree(s).read(path +/+  "%_kdtree.json".format(name));
+			scaled_dataset = FluidDataSet(s).read(path +/+  "%_scaled_dataset.json".format(name));
+			lookup = FluidDataSet(s).read(path +/+  "%_lookup.json".format(name));
 		};
-		scaler = FluidNormalize(s, -1, 1).read(path +/+  "%_scaler.json".format(name));
-		kdtree = FluidKDTree(s).read(path +/+  "%_kdtree.json".format(name));
-		scaled_dataset = FluidDataSet(s).read(path +/+  "%_scaled_dataset.json".format(name));
-		lookup = FluidDataSet(s).read(path +/+  "%_lookup.json".format(name));
 	}
 }
 
@@ -399,4 +439,12 @@ FluidModelSlicer {
 
 FluidModelAnalyser {
 
+}
+
++ FluidViewer {
+
+	*createCatColors {
+		// colors from: https://github.com/d3/d3-scale-chromatic/blob/main/src/categorical/category10.js
+		^100.collect {|idx| Color.hsv(idx/100, 1, 1) };
+	}
 }
