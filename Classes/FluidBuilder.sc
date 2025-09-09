@@ -292,7 +292,7 @@ FluidModel {
 		var c = Condition.new();
 
 		//scaler = FluidStandardize(s);
-		//scaler = FluidNormalize(s, -1, 1);
+		scaler = FluidNormalize(s, -1, 1);
 		//scaler = FluidRobustScale(s);
 
 		"Fitting KDTree".postln;
@@ -359,6 +359,7 @@ FluidModel {
 		model.datasets.keys.do {|key|
 			model.datasets[key].write(path +/+ "%_%_dataset.json".format(key, name));
 		};
+		model.labelset.write(path +/+ "%_labelset.json".format(name));
 		model.scaler.write(path +/+  "%_scaler.json".format(name));
 		model.kdtree.write(path +/+  "%_kdtree.json".format(name));
 		model.scaled_dataset.write(path +/+  "%_scaled_dataset.json".format(name));
@@ -375,12 +376,14 @@ FluidModel {
 		slices = Buffer.read(s, path +/+ "%_slices.aiff".format(name));
 		if (loadDatasets) {
 			datasets.keys.do {|key|
+				"loading %...".format(key).postln;
 				datasets[key] = FluidDataSet(s).read(path +/+ "%_%_dataset.json".format(key, name));
 			};
 			scaler = FluidNormalize(s, -1, 1).read(path +/+  "%_scaler.json".format(name));
 			kdtree = FluidKDTree(s).read(path +/+  "%_kdtree.json".format(name));
 			scaled_dataset = FluidDataSet(s).read(path +/+  "%_scaled_dataset.json".format(name));
 			lookup = FluidDataSet(s).read(path +/+  "%_lookup.json".format(name));
+			labelset = FluidLabelSet(s).read(path +/+ "%_labelset.json".format(name));
 		};
 	}
 }
@@ -441,10 +444,49 @@ FluidModelAnalyser {
 
 }
 
-+ FluidViewer {
 
-	*createCatColors {
++ FluidPlotter {
+
+	/*
+    *createCatColors {
 		// colors from: https://github.com/d3/d3-scale-chromatic/blob/main/src/categorical/category10.js
 		^100.collect {|idx| Color.hsv(idx/100, 1, 1) };
 	}
+    */
+
+	categories_ {
+		arg labelSetDict;
+
+		if(dict_internal.size != 0,{
+			var label_to_int = Dictionary.new;
+			var counter = 0;
+			dict_internal.keysValuesDo({
+				arg id, fp_pt;
+
+				// the id has to be converted back into a string because the
+				// labelSetDict that comes in has the keys as strings by default
+				var category_string = labelSetDict.at("data").at(id.asString)[0];
+				var category_int;
+				var color;
+
+				if(label_to_int.at(category_string).isNil,{
+					label_to_int.put(category_string,counter);
+					counter = counter + 1;
+				});
+
+				category_int = label_to_int.at(category_string);
+
+				/*if(category_int > (categoryColors.size-1),{
+					"FluidPlotter:setCategories_ FluidPlotter doesn't have that many category colors. You can use the method 'setColor_' to set colors for individual points.".warn
+				});
+
+				color = categoryColors[category_int];
+				fp_pt.color_(color);*/
+			});
+			this.refresh;
+		},{
+			"FluidPlotter::setCategories_ FluidPlotter cannot receive method \"categories_\". It has no data. First set a dictionary.".warn;
+		});
+	}
 }
+
