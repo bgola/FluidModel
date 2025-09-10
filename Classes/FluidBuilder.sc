@@ -296,6 +296,10 @@ FluidModel {
 	plot { arg dataset, action;
 		var plotds = FluidDataSet(s);
 		var tree, point, return, plotter, treeAction;
+		var ret = (plotter: nil, action: nil, pcanorm: nil, norm: nil, pca: nil, tree: nil);
+
+		point = Buffer.alloc(s, 2);
+		return = Buffer(s);
 
 		if (dataset.isNil) {
 			dataset = datasets[\merged];
@@ -306,41 +310,50 @@ FluidModel {
 		};
 
 		treeAction = { arg plotter, x, y, mod, btNum, clickCnt;
-			point.setn(0, x, 1, y);
-			tree.kNearest(point, 1, {|value|
-				datasets.duration.getPoint(value, return, {
-					if (action.notNil) {
-						action.(value, return);
-					} {
-						return.getn(0, 5, {|vals|
-							var file = loader.files[vals.last.asInteger];
-							var bounds = loader.index[file.path.basename.asSymbol][\bounds];
+			var point = Buffer.alloc(s, 2);
+			fork {
+				s.sync;
+				point.setn(0, x, 1, y);
+				tree.kNearest(point, 1, {|value|
+					datasets.duration.getPoint(value, return, {
+						if (action.notNil) {
+							action.(value, return);
+						} {
+							return.getn(0, 5, {|vals|
+								var file = loader.files[vals.last.asInteger];
+								var bounds = loader.index[file.path.basename.asSymbol][\bounds];
 
-							"Slice from file % starting at second % lasting for % seconds".format(
-								file.path,
-								(vals[1] - bounds[0]) / mono.sampleRate,
-								vals[0]).postln;
-						})
-					};
-				})
-			})
+								"Slice from file % starting at second % lasting for % seconds".format(
+									file.path,
+									(vals[1] - bounds[0]) / mono.sampleRate,
+									vals[0]).postln;
+							})
+						};
+					})
+				});
+				if (point.numFrames.notNil) {
+					point.free;
+				}
+			};
 		};
+
+
 
 		FluidNormalize(s).fitTransform(dataset, plotds);
 		FluidPCA(s, 2).fitTransform(plotds, plotds);
-		FluidNormalize(s).fitTransform(plotds, plotds);
+		ret[\pcanorm] = FluidNormalize(s).fitTransform(plotds, plotds);
 
 		tree = FluidKDTree(s, 1);
 		tree.fit(plotds);
-
-		point = Buffer.alloc(s, 2);
-		return = Buffer(s);
+		ret[\tree] = tree;
 
 		plotds.dump({|dic| defer {
 			plotter = FluidPlotter(dict: dic, mouseMoveAction: {|plotter, x,y, mod, btNum, clickCnt|
 				treeAction.(plotter, x, y, mod, btNum, clickCnt);
 			});
 			plotter.userView.mouseUpAction_({});
+			ret[\plotter] = plotter;
+			ret[\action] = { |ret, x, y| treeAction.(ret.plotter, x, y)  };
 		}});
 
 		fork {
@@ -358,6 +371,8 @@ FluidModel {
 				};
 			});
 		};
+
+		^ret;
 	}
 
 	export {
