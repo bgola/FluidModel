@@ -21,7 +21,7 @@ FluidSKMeans
 FluidModel {
 	var <buffer, <monos, <loader, <mono, <slices, <dataset, <scaler, <kdtree;
 	var <scaled_dataset, <lookup, <folder, <datasets, <labelset;
-	var <>slicer, <durations;
+	var <>slicer;
 	var <s, cond;
 
 	*new {
@@ -32,7 +32,6 @@ FluidModel {
 		s = Server.default;
 		this.slicer = FluidModelSlicer.default();
 		datasets = (mfcc: 0, chroma: 0, pitch: 0, spectralShape: 0, loudness: 0, duration: 0, merged: 0);
-		durations = [];
 	}
 
 	loadFolder {|folder|
@@ -128,13 +127,54 @@ FluidModel {
 		^indices;
 	}
 
-	analyze {
-		var features_buf = {Buffer(s)}!5;
-		var stats_buf = {Buffer(s)}!5;
-		var flat_buf = {Buffer(s)}!5;
-		var dur_buf = Buffer.alloc(s, 5);
-		var duration = [];
+	chainFlatten { arg buf, ds, slice_index;
+		var stats = Buffer(s);
+		var flat = Buffer(s);
+		FluidBufStats.processBlocking(s, buf, stats:stats,select:[\mean]);
+		FluidBufFlatten.processBlocking(s, stats, destination: flat);
+		ds.addPoint("slice-%".format(slice_index), flat);
+		stats.free; flat.free;
+	}
 
+	chainMFCC { arg buf, start_frame, num_frames, slice_index, dss;
+		FluidBufMFCC.processBlocking(s,mono,start_frame,num_frames,features: buf, startCoeff:1,numCoeffs:13);
+		this.chainFlatten(buf, dss[\mfcc], slice_index);
+	}
+
+	chainChroma { arg buf, start_frame, num_frames, slice_index, dss;
+		FluidBufChroma.processBlocking(s,mono,start_frame,num_frames,features: buf);
+		this.chainFlatten(buf, dss[\chroma], slice_index);
+	}
+
+	chainPitch { arg buf, start_frame, num_frames, slice_index, dss;
+		FluidBufPitch.processBlocking(s,mono,start_frame,num_frames,features: buf, select: [\pitch, \confidence]);
+		this.chainFlatten(buf, dss[\pitch], slice_index);
+	}
+
+	chainShape { arg buf, start_frame, num_frames, slice_index, dss;
+		FluidBufSpectralShape.processBlocking(s,mono,start_frame,num_frames,features: buf);
+		this.chainFlatten(buf, dss[\spectralShape], slice_index);
+	}
+
+	chainLoudness { arg buf, start_frame, num_frames, slice_index, dss;
+		FluidBufLoudness.processBlocking(s,mono,start_frame,num_frames,features: buf);
+		this.chainFlatten(buf, dss[\loudness], slice_index);
+	}
+
+	chainDuration { arg buf, start_frame, end_frame, num_frames, slice_index, current_file, dss;
+		var duration_values = [
+			num_frames/mono.sampleRate,
+			start_frame,
+			end_frame,
+			slice_index,
+			current_file
+		];
+		buf.setn(0, duration_values);
+		s.sync;
+		dss[\duration].addPoint("slice-%".format(slice_index), buf);
+	}
+
+	analyze { arg num_threads;
 		var mfccDS = FluidDataSet(s);
 		var chromaDS = FluidDataSet(s);
 		var pitchDS = FluidDataSet(s);
@@ -142,72 +182,81 @@ FluidModel {
 		var loudnessDS = FluidDataSet(s);
 		var durationDS = FluidDataSet(s);
 
-		var c = Condition.new();
 		var datasets = (mfcc: mfccDS, chroma: chromaDS, pitch: pitchDS, spectralShape: spectralshapeDS,
 			loudness: loudnessDS, duration: durationDS);
-		var current_file = 0;
+		var buffers = {(mfcc: Buffer(s), chroma: Buffer(s), pitch: Buffer(s), specShape: Buffer(s), loudness: Buffer(s), duration: Buffer.alloc(s, 5))}!num_threads;
+		var mainCond = Condition.new;
+		var slices_array, threads_slices = ();
+		var threads = [];
 
 		labelset = FluidLabelSet(s);
 
 		"Starting analysis".postln;
-
-		slices.loadToFloatArray(action: { arg slices_array;
-			fork {
-				// iterate over each index in this array, paired with this next neighbor so that we know where to start
-				// and stop the analysis
-				slices_array.doAdjacentPairs{
-					arg start_frame, end_frame, slice_index;
-					var num_frames = end_frame - start_frame;
-					if (start_frame > loader.index[loader.files[current_file].path.basename.asSymbol][\bounds][1]) {
-						current_file = current_file + 1;
-					};
-					"analyzing slice: % / %".format(slice_index + 1,slices_array.size - 1).postln;
-					FluidBufMFCC.processBlocking(s,mono,start_frame,num_frames,features: features_buf[0],startCoeff:1,numCoeffs:13);
-					FluidBufStats.processBlocking(s,features_buf[0],stats:stats_buf[0],select:[\mean]);
-					FluidBufFlatten.processBlocking(s,stats_buf[0],destination:flat_buf[0]);
-					mfccDS.addPoint("slice-%".format(slice_index),flat_buf[0]);
-
-					FluidBufChroma.processBlocking(s,mono,start_frame,num_frames,features:features_buf[1],normalize:1);
-					FluidBufStats.processBlocking(s,features_buf[1],stats:stats_buf[1],select:[\mean]);
-					FluidBufFlatten.processBlocking(s,stats_buf[1],destination:flat_buf[1]);
-					chromaDS.addPoint("slice-%".format(slice_index),flat_buf[1]);
-
-					FluidBufPitch.processBlocking(s,mono,start_frame,num_frames,features:features_buf[2],select:[\pitch, \confidence],algorithm:2);
-					FluidBufStats.processBlocking(s,features_buf[2],stats:stats_buf[2],select:[\mean]);
-					FluidBufFlatten.processBlocking(s,stats_buf[2],destination:flat_buf[2]);
-					pitchDS.addPoint("slice-%".format(slice_index),flat_buf[2]);
-
-					FluidBufSpectralShape.processBlocking(s,mono,start_frame,num_frames,features:features_buf[3], select:[\flatness]);
-					FluidBufStats.processBlocking(s,features_buf[3],stats:stats_buf[3],select:[\mean]);
-					FluidBufFlatten.processBlocking(s,stats_buf[3],destination:flat_buf[3]);
-					spectralshapeDS.addPoint("slice-%".format(slice_index),flat_buf[3]);
-
-					FluidBufLoudness.processBlocking(s,mono,start_frame,num_frames,features:features_buf[4]);
-					FluidBufStats.processBlocking(s,features_buf[4],stats:stats_buf[4],select:[\mean]);
-					FluidBufFlatten.processBlocking(s,stats_buf[4],destination:flat_buf[4]);
-					loudnessDS.addPoint("slice-%".format(slice_index),flat_buf[4]);
-
-					dur_buf.set(0, num_frames/mono.sampleRate);
-					dur_buf.set(1, start_frame);
-					dur_buf.set(2, end_frame);
-					dur_buf.set(3, slice_index);
-					dur_buf.set(4, current_file);
-					s.sync;
-
-					durationDS.addPoint("slice-%".format(slice_index),dur_buf);
-					duration = [num_frames/mono.sampleRate, start_frame, end_frame];
-					durations = durations.add(duration);
-					labelset.addLabel("slice-%".format(slice_index), loader.files[current_file].path.basename.asSymbol);
-					s.sync;
-					//if((slice_index % 100) == 99){s.sync};
-				};
-				s.sync;
-				"Done with analysis".postln;
-				c.test = true;
-				c.signal;
-			};
+		slices.loadToFloatArray(action: { arg array;
+			slices_array = array;
+			mainCond.test = true; mainCond.signal;
 		});
-		c.wait;
+		mainCond.wait; mainCond.test = false;
+		s.sync;
+
+		slices_array.doAdjacentPairs { arg start_frame, end_frame, slice_index;
+			var num_frames, dur_buf, current_file;
+			var thread = slice_index % num_threads;
+
+			threads_slices[thread] = threads_slices[thread].add([start_frame, end_frame, slice_index]);
+		};
+
+		threads = threads_slices.collect { |thread_slices, thread|
+			fork {
+				thread_slices.do {|slice|
+					var start_frame = slice[0];
+					var end_frame = slice[1];
+					var slice_index = slice[2];
+					var num_frames, dur_buf;
+
+					var found = false;
+					var current_file_idx = 0;
+					var current_file = loader.files[current_file_idx];
+					num_frames = end_frame - start_frame;
+
+					while { current_file.notNil and: { found.not } } {
+						var current = current_file.path.basename.asSymbol;
+						if (start_frame < loader.index[current][\bounds][1]) {
+							found = true;
+						};
+						if (found.not) {
+							current_file_idx = current_file_idx + 1;
+							current_file = loader.files[current_file_idx];
+						};
+					};
+
+					"analyzing slice: % / %".format(slice_index + 1,slices_array.size - 1).postln;
+
+					this.chainMFCC(buffers[thread].mfcc, start_frame, num_frames, slice_index, datasets);
+					this.chainChroma(buffers[thread].chroma, start_frame, num_frames, slice_index, datasets);
+					this.chainPitch(buffers[thread].pitch, start_frame, num_frames, slice_index, datasets);
+					this.chainShape(buffers[thread].specShape, start_frame, num_frames, slice_index, datasets);
+					this.chainLoudness(buffers[thread].loudness, start_frame, num_frames, slice_index, datasets);
+					this.chainDuration(buffers[thread].duration, start_frame, end_frame, num_frames, slice_index,
+						current_file_idx, datasets);
+
+					labelset.addLabel("slice-%".format(slice_index), current_file.path.basename.asSymbol);
+
+					s.sync;
+					datasets[\duration].size({|size|
+						if (size >= (slices_array.size - 1)) {
+							mainCond.test = true; mainCond.signal;
+						}
+					});
+
+				}
+			}
+		};
+
+		mainCond.wait;
+		threads.do(_.stop);
+
+		"Done with analysis".postln;
 
 		^datasets;
 	}
@@ -216,35 +265,99 @@ FluidModel {
 		var query = FluidDataSetQuery(s);
 		var c = Condition.new;
 		var normalize, keys, cols, ds;
-		keys = datasets.keys.reject {|ds| ds == \merged }.asArray;
+		keys = datasets.skeys.reject {|ds| ds == \merged }.asArray;
 		datasets.merged = FluidDataSet(s);
-		ds = keys[0].postln;
+		ds = keys[0];
 		c.test = false;
+
 		datasets[ds].cols({|ncols| cols = ncols; c.test=true; c.signal });
-		c.wait;
-		c.test = false;
-		query.addRange(0, (cols).postln, {c.test=true; c.signal});
-		c.wait;
-		c.test = false;
+		c.wait; c.test = false;
+
+		query.addRange(0, (cols), {c.test=true; c.signal});
+		c.wait; c.test = false;
+
 		query.transform(datasets[ds], datasets.merged, {c.test=true; c.signal});
-		c.wait;
-		c.test = false;
+		c.wait; c.test = false;
+
 		keys[1..].do {|ds|
 			query.free;
 			query = FluidDataSetQuery(s);
 			c.test=false;
-			datasets[ds.postln].cols({|ncols| cols = ncols; c.test=true; c.signal });
-			c.wait;
-			c.test = false;
-			query.addRange(0, (cols).postln, {c.test=true; c.signal});
-			c.wait;
-			c.test = false;
+			datasets[ds].cols({|ncols| cols = ncols; c.test=true; c.signal });
+			c.wait; c.test = false;
+			query.addRange(0, (cols), {c.test=true; c.signal});
+			c.wait; c.test = false;
 			query.transformJoin(datasets[ds], datasets.merged, datasets.merged, {c.test=true; c.signal});
-			c.wait;
-			c.test = false;
+			c.wait; c.test = false;
 		};
-		//FluidNormalize(s).fitTransform(datasets.merged, datasets.merged, {c.test=true; c.signal});
-		//c.wait;
+	}
+
+	// TODO: make this more flexible so we can include the window in other windows
+	plot { arg dataset, action;
+		var plotds = FluidDataSet(s);
+		var tree, point, return, plotter, treeAction;
+
+		if (dataset.isNil) {
+			dataset = datasets[\merged];
+		};
+
+		if (dataset.isKindOf(Symbol)) {
+			dataset = datasets[dataset];
+		};
+
+		treeAction = { arg plotter, x, y, mod, btNum, clickCnt;
+			point.setn(0, x, 1, y);
+			tree.kNearest(point, 1, {|value|
+				datasets.duration.getPoint(value, return, {
+					if (action.notNil) {
+						action.(value, return);
+					} {
+						return.getn(0, 5, {|vals|
+							var file = loader.files[vals.last.asInteger];
+							var bounds = loader.index[file.path.basename.asSymbol][\bounds];
+
+							"Slice from file % starting at second % lasting for % seconds".format(
+								file.path,
+								(vals[1] - bounds[0]) / mono.sampleRate,
+								vals[0]).postln;
+						})
+					};
+				})
+			})
+		};
+
+		FluidNormalize(s).fitTransform(dataset, plotds);
+		FluidPCA(s, 2).fitTransform(plotds, plotds);
+		FluidNormalize(s).fitTransform(plotds, plotds);
+
+		tree = FluidKDTree(s, 1);
+		tree.fit(plotds);
+
+		point = Buffer.alloc(s, 2);
+		return = Buffer(s);
+
+		plotds.dump({|dic| defer {
+			plotter = FluidPlotter(dict: dic, mouseMoveAction: {|plotter, x,y, mod, btNum, clickCnt|
+				treeAction.(plotter, x, y, mod, btNum, clickCnt);
+			});
+			plotter.userView.mouseUpAction_({});
+		}});
+
+		fork {
+			s.sync;
+			labelset.dump({|dic|
+				var colors = dic["data"].values.asSet.asList.collect {|v, idx| [v[0].asSymbol, idx] }.flatten.asDict;
+				var colorsn = colors.size;
+				dic["data"].keysValuesDo {|k,v|
+					var cols = colors[v[0].asSymbol];
+					var cola = (cols * 3) % colorsn / colorsn;
+					var colb = (cols * 4) % colorsn / colorsn;
+					var colc = (cols * 5) % colorsn / colorsn;
+					var color = Color.hsv(cola, colb.linlin(0,1,0.5,1.0), colc.linlin(0,1,0.5,1), 0.7);
+					plotter.pointColor_(k, color);
+				};
+			});
+		};
 	}
 
 	export {
@@ -296,7 +409,6 @@ FluidModel {
 		//scaler = FluidRobustScale(s);
 
 		"Fitting KDTree".postln;
-
 		kdtree.fit(datasets.merged,{
 			"kdtree is fit".postln;
 			c.test = true;
@@ -324,7 +436,7 @@ FluidModel {
 		^lookup;
 	}
 
-	build { arg path, action;
+	build { arg path, num_threads=1, action;
 		var scaler_tree;
 		folder = path;
 		fork {
@@ -332,7 +444,7 @@ FluidModel {
 			monos = this.loadBothMono;
 			mono = this.toMono;
 			slices = this.slice;
-			this.analyze.keysValuesDo {|key, value|
+			this.analyze(num_threads).keysValuesDo {|key, value|
 				datasets[key] = value;
 			};
 			this.mergeDatasets;
@@ -400,7 +512,7 @@ FluidModelSlicer {
 		^this.novelty();
 	}
 
-	*novelty { arg algorithm=0, kernelSize=3, threshold=0.5, filterSize=1,
+	*novelty { arg algorithm=0, kernelSize=15, threshold=0.25, filterSize=1,
 		minSliceLength=2, windowSize=1024, hopSize= -1, fftSize= -1;
 		^this.new(
 			FluidBufNoveltySlice,
