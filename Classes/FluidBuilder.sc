@@ -26,6 +26,7 @@ FluidModel {
 	var <scaled_dataset, <lookup, <datasets, <labelset, <datasets_info;
 	var <>slicer, <slice_cache;
 	var <s, <server, cond;
+	var <nmf_bases;
 
 	*initClass {
 		all = ();
@@ -193,20 +194,18 @@ FluidModel {
 	chainShape { arg buf, start_frame, num_frames, slice_index, dss;
 		FluidBufSpectralShape.processBlocking(s,mono,start_frame,num_frames,features: buf);
 		this.chainFlatten(buf, dss[\spectralShape], slice_index);
+
 	}
 
 	chainLoudness { arg buf, start_frame, num_frames, slice_index, dss;
 		FluidBufLoudness.processBlocking(s,mono,start_frame,num_frames,features: buf);
 		this.chainFlatten(buf, dss[\loudness], slice_index);
+
 	}
 
 	chainDuration { arg buf, num_frames, slice_index, dss;
 		var duration_values = [
 			num_frames/mono.sampleRate,
-			/*start_frame,
-			end_frame,
-			slice_index,
-			current_file*/
 		];
 		buf.setn(0, duration_values);
 		s.sync;
@@ -227,6 +226,13 @@ FluidModel {
 		dss[\slice_info].addPoint("%-%".format(key, slice_index), buf);
 	}
 
+	calculateNMF { arg sample_duration, nbases, action;
+		this.sampleCorpus(sample_duration, {|buf|
+			nmf_bases = Buffer(s);
+			FluidBufNMF.processBlocking(s, buf, 0, -1, 0, -1, -1, 0, nmf_bases, 0, components: nbases, iterations: 200, action: action);
+		});
+	}
+
 	analyze { arg num_threads;
 		var mfccDS = FluidDataSet(s);
 		var chromaDS = FluidDataSet(s);
@@ -244,7 +250,7 @@ FluidModel {
 		}!num_threads;
 		var mainCond = Condition.new;
 		var slices_array, threads_slices = ();
-		var threads = [];
+		var threads = nil!num_threads;
 
 		labelset = FluidLabelSet(s);
 
@@ -254,7 +260,6 @@ FluidModel {
 			mainCond.test = true; mainCond.signal;
 		});
 		mainCond.wait; mainCond.test = false;
-		s.sync;
 
 		slices_array.doAdjacentPairs { arg start_frame, end_frame, slice_index;
 			var num_frames, dur_buf, current_file;
@@ -298,19 +303,19 @@ FluidModel {
 					this.chainSliceInfo(buffers[thread].slice_info, start_frame, end_frame, num_frames, slice_index, current_file_idx, datasets);
 
 					labelset.addLabel("%-%".format(key, slice_index), current_file.path.basename.asSymbol);
-
 					s.sync;
+
 					datasets[\slice_info].size({|size|
 						if (size >= (slices_array.size - 1)) {
 							mainCond.test = true; mainCond.signal;
 						}
 					});
-
 				}
 			}
 		};
 
 		mainCond.wait;
+		"stopping threads".postln;
 		threads.do(_.stop);
 
 		"Done with analysis".postln;
@@ -722,6 +727,7 @@ FluidModel {
 			model.datasets[k].write(path +/+ "%_%_dataset.json".format(k, name));
 		};
 		model.labelset.write(path +/+ "%_labelset.json".format(name));
+		FluidLoadStore.store(loader, path, name);
 		//model.scaler.write(path +/+  "%_scaler.json".format(name));
 		//model.kdtree.write(path +/+  "%_kdtree.json".format(name));
 		//model.scaled_dataset.write(path +/+  "%_scaled_dataset.json".format(name));
@@ -750,6 +756,7 @@ FluidModel {
 			//lookup = FluidDataSet(s).read(path +/+  "%_lookup.json".format(name));
 			labelset = FluidLabelSet(s).read(path +/+ "%_labelset.json".format(name));
 		};
+		loader = FluidLoadStore.load(path, name);
 		slice_cache = (path +/+ "%_slice_cache.scd".format(name)).load;
 		datasets_info = (path +/+ "%_datasets_info.scd".format(name)).load;
 
@@ -891,6 +898,34 @@ FluiditySimplePlayer {
 	}
 }
 
+FluidLoadStore {
+	var <files, <index, <buffer;
+
+	*new {|files, index, buffer|
+		var soundfiles = files.collect {|path| SoundFile(path).info };
+		^this.newCopyArgs(soundfiles, index, buffer);
+	}
+
+	*store { |loader, path, name|
+
+		File.use(path +/+ "loader_files_%.scd".format(name), "w", {|file|
+			file.write(loader.files.collect { |soundfile|
+				soundfile.path
+			}.asCompileString)
+		});
+
+		File.use(path +/+ "loader_index_%.scd".format(name), "w", {|file| file.write(loader.index.asCompileString)});
+		loader.buffer.write(path +/+ "loader_buffer_%.aiff".format(name));
+	}
+
+	*load { |path, name|
+		^this.new(
+			(path +/+ "loader_files_%.scd".format(name)).load,
+			(path +/+ "loader_index_%.scd".format(name)).load,
+			Buffer.read(Server.default, path +/+ "%.aiff".format(name))
+		);
+	}
+}
 
 FluidLoadMultiple {
 	var < files, idFunc,channelFunc;
