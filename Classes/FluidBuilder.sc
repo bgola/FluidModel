@@ -710,9 +710,12 @@ FluidModel {
 			//kdtree = scaler_tree[1];
 			//scaled_dataset = scaler_tree[2];
 			//lookup = this.makeLookup;
-			if (action.notNil) {
-				action.(this);
-			};
+
+			this.calculateNMF(60, 8, {action.(this)});
+
+			//if (action.notNil) {
+			//	action.(this);
+			//};
 		}
 	}
 
@@ -727,6 +730,8 @@ FluidModel {
 			model.datasets[k].write(path +/+ "%_%_dataset.json".format(k, name));
 		};
 		model.labelset.write(path +/+ "%_labelset.json".format(name));
+		model.nmf_bases.write(path +/+ "%_nmf_bases.aiff".format(name));
+
 		FluidLoadStore.store(loader, path, name);
 		//model.scaler.write(path +/+  "%_scaler.json".format(name));
 		//model.kdtree.write(path +/+  "%_kdtree.json".format(name));
@@ -744,6 +749,7 @@ FluidModel {
 		monos[0] = Buffer.readChannel(s, path +/+ "%.aiff".format(name), channels:[0]);
 		monos[1] = Buffer.readChannel(s, path +/+ "%.aiff".format(name), channels:[1]);
 		mono = Buffer.read(s, path +/+ "%_mono.aiff".format(name));
+		nmf_bases = Buffer.read(s, path +/+ "%_nmf_bases.aiff".format(name));
 		slices = Buffer.read(s, path +/+ "%_slices.aiff".format(name));
 		if (loadDatasets) {
 			datasets.keys.do {|k|
