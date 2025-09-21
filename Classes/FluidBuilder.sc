@@ -167,6 +167,38 @@ FluidModel {
 		^indices;
 	}
 
+	play { arg slice;
+		var player = FluiditySimplePlayer();
+		var func = player.get;
+		func.(this, slice);
+	}
+
+	combineSlices { arg slices=#[], action;
+		var total_samples = slices.collect {|slice| this.slice_cache[slice][0] }.sum;
+		var return = (
+			buffer: Buffer.alloc(s, total_samples, buffer.numChannels),
+			slices: ();
+		);
+		forkIfNeeded {
+			var current_sample = 0;
+			server.sync;
+			buffer.updateInfo;
+			server.sync;
+			slices.do { arg slice;
+				var start, num_samples;
+				start = slice_cache[slice][1];
+				num_samples = slice_cache[slice][0];
+				buffer.copyData(return.buffer, current_sample, start, num_samples);
+				return.slices[slice] = [num_samples, current_sample, current_sample+num_samples];
+				current_sample = current_sample + num_samples;
+			};
+
+			server.sync;
+			if (action.notNil) { action.(return) };
+		};
+		^return;
+	}
+
 	chainFlatten { arg buf, ds, slice_index;
 		var stats = Buffer(s);
 		var flat = Buffer(s);
@@ -952,7 +984,7 @@ FluidLoadMultiple {
 		counter = 0;
 		index = IdentityDictionary();
 		forkIfNeeded{
-			buffer = Buffer.alloc(server,sizes.reduce('+'),maxChan);
+			buffer = Buffer.alloc(server, sizes.reduce('+'), maxChan);
 
 			server.sync;
 			buffer.updateInfo;
