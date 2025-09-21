@@ -1056,3 +1056,11 @@ FluidLoadMultiple {
 	}
 }
 
++ Dictionary {
+	skeys {
+		var keys = this.keys(Array);
+		try { keys.sort };
+		^keys
+	}
+}
+
