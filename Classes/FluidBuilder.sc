@@ -138,7 +138,7 @@ FluidModel {
 						}
 					}
 				);
-			};
+			};Ndef('grainr')
 		}{
 			"loader buffer is already mono".postln;
 			buf = buffer;
@@ -258,10 +258,10 @@ FluidModel {
 		dss[\slice_info].addPoint("%-%".format(key, slice_index), buf);
 	}
 
-	calculateNMF { arg sample_duration, nbases, action;
+	calculateNMF { arg sample_duration, nbases, action, iterations=200;
 		this.sampleCorpus(sample_duration, {|buf|
 			nmf_bases = Buffer(s);
-			FluidBufNMF.processBlocking(s, buf, 0, -1, 0, -1, -1, 0, nmf_bases, 0, components: nbases, iterations: 200, action: action);
+			FluidBufNMF.processBlocking(s, buf, 0, -1, 0, -1, -1, 0, nmf_bases, 0, components: nbases, iterations: iterations, action: action);
 		});
 	}
 
@@ -391,7 +391,7 @@ FluidModel {
 		^merged;
 	}
 
-	prReduceDataset { arg dataset, n, algo, grid, action;
+	prReduceDataset { arg dataset, n, algo, grid, neighbors=1, action;
 		var reduxds;
 		var tree, return, treeAction;
 		var ret = (norm: nil, algo: nil, tree: nil, dataset: nil, find: nil);
@@ -439,23 +439,27 @@ FluidModel {
 			fork {
 				s.sync;
 				point.setn(0, coordinates);
-				tree.kNearest(point, 1, {|slice|
-					var modelkey = slice.asString.split($-).drop(-1).join($-).asSymbol;
-
-					// this is in case this is being called by a ModelCompose
-					var model = FluidModel(modelkey);
-					var slice_info = slice_cache[slice.asSymbol];
-
-					if (action.notNil) {
-						action.(model, slice);
+				tree.kNearest(point, neighbors, {|slices|
+					if (neighbors > 1) {
+						action.(slices);
 					} {
-						var file = model.loader.files[slice_info[4].asInteger];
-						var bounds = model.loader.index[file.path.basename.asSymbol][\bounds];
+						var slice = slices;
+						var modelkey = slice.asString.split($-).drop(-1).join($-).asSymbol;
+						// this is in case this is being called by a ModelCompose
+						var model = FluidModel(modelkey);
 
-						"Slice from file % starting at second % lasting for % seconds".format(
-							file.path,
-							(slice_info[1] - bounds[0]) / model.mono.sampleRate,
-							slice_info[0] / model.mono.sampleRate).postln;
+						if (action.notNil) {
+							action.(model, slice);
+						} {
+							var slice_info = slice_cache[slice.asSymbol];
+							var file = model.loader.files[slice_info[4].asInteger];
+							var bounds = model.loader.index[file.path.basename.asSymbol][\bounds];
+
+							"Slice from file % starting at second % lasting for % seconds".format(
+								file.path,
+								(slice_info[1] - bounds[0]) / model.mono.sampleRate,
+								slice_info[0] / model.mono.sampleRate).postln;
+						};
 					};
 				});
 
@@ -471,7 +475,7 @@ FluidModel {
 		^ret;
 	}
 
-	reduceDimension { arg n=2, algo=\pca, dataset, grid=0, action;
+	reduceDimension { arg n=2, algo=\pca, dataset, grid=0, neighbors=1, action;
 		var ret = ();
 
 		if (dataset.isNil) {
@@ -488,7 +492,7 @@ FluidModel {
 			};
 
 			if (dataset.isKindOf(FluidDataSet)) {
-				this.prReduceDataset(dataset, n, algo, grid, action).keysValuesDo {|k,v|
+				this.prReduceDataset(dataset, n, algo, grid, neighbors, action).keysValuesDo {|k,v|
 					ret[k] = v;
 				};
 			};
@@ -497,17 +501,20 @@ FluidModel {
 	}
 
 	// TODO: make this more flexible so we can include the window in other windows
-	plot { arg dataset, algo=\pca, grid=0, action;
+	plot { arg dataset, algo=\pca, grid=0, neighbors=1, action, upAction;
 		var plotter;
 		var ret = (plotter: nil, redux: nil);
 
-		ret[\redux] = this.reduceDimension(2, algo, dataset, grid, { arg redux;
+		ret[\redux] = this.reduceDimension(2, algo, dataset, grid, neighbors, { arg redux;
 
 			redux.dataset.dump({|dic| defer {
 				plotter = FluidPlotter(dict: dic, mouseMoveAction: {|plotter, x,y, mod, btNum, clickCnt|
 					redux.find([x,y], action);
 				});
-				plotter.userView.mouseUpAction_({});
+
+				if (upAction.isNil) { upAction = {} };
+
+				plotter.userView.mouseUpAction_(upAction);
 				ret[\plotter] = plotter;
 
                  forkIfNeeded {
@@ -713,7 +720,11 @@ FluidModel {
 		var scaler_tree;
 		forkIfNeeded {
 			if (files.isString) {
-				buffer = this.loadFolder(files);
+				if (files.isFolder) {
+					buffer = this.loadFolder(files);
+				} {
+					buffer = this.loadSingleFile(files);
+				};
 			} {
 				buffer = this.loadMultiple(files);
 			};
@@ -992,6 +1003,7 @@ FluidLoadMultiple {
 			server.sync;
 			this.files.do{|f,i|
 				var channelMap,identifier,entry;
+				"copying data %".format(i).postln;
 				f.copyData(buffer, startEnd[i][0]);
 				server.sync;
 				buffer.updateInfo;
