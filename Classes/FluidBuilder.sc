@@ -90,15 +90,16 @@ FluidModel {
 	loadBothMono {
 		var buff0, buff1;
 		var c = Condition.new();
+		var tmpFile = PathName.tmp ++ "%_multichannel.aiff".format(key);
 		buffer.postln;
 		if (buffer.numChannels.postln == 2) {
-			buffer.write("/tmp/multichannel.aiff", completionMessage: {|buf|
+			buffer.write(tmpFile, completionMessage: {|buf|
 				buf.postln;
 				fork {
 					0.1.wait;
 					"wrote, now read".postln;
-					buff0 = Buffer.readChannel(s, "/tmp/multichannel.aiff", channels:[0], action: {
-						buff1 = Buffer.readChannel(s, "/tmp/multichannel.aiff", channels:[1], action: {
+					buff0 = Buffer.readChannel(s, tmpFile, channels:[0], action: {
+						buff1 = Buffer.readChannel(s, tmpFile, channels:[1], action: {
 							"loaded multichannel to mono buffers".postln;
 							c.test = true;
 							c.signal;
