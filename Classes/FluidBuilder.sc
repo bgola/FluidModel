@@ -27,6 +27,7 @@ FluidModel {
 	var <>slicer, <slice_cache;
 	var <s, <server, cond;
 	var <nmf_bases;
+	var <bufferPath;
 
 	*initClass {
 		all = ();
@@ -48,6 +49,14 @@ FluidModel {
 			model = super.newCopyArgs(key).init;
 		};
 		all[key] = model;
+		^model;
+	}
+
+	*load { arg path, loadAudioBuffers=true;
+		var config = File.new(path +/+ "config.fluidity", "r");
+		var name = config.readAllString.stripWhiteSpace;
+		var model = FluidModel(name);
+		model.load(path, loadAudioBuffers);
 		^model;
 	}
 
@@ -91,7 +100,9 @@ FluidModel {
 		var buff0, buff1;
 		var c = Condition.new();
 		var tmpFile = PathName.tmp ++ "%_multichannel.aiff".format(key);
+		bufferPath = tmpFile;
 		buffer.postln;
+
 		if (buffer.numChannels.postln == 2) {
 			buffer.write(tmpFile, completionMessage: {|buf|
 				buf.postln;
@@ -139,7 +150,7 @@ FluidModel {
 						}
 					}
 				);
-			};Ndef('grainr')
+			};
 		}{
 			"loader buffer is already mono".postln;
 			buf = buffer;
@@ -198,6 +209,26 @@ FluidModel {
 			if (action.notNil) { action.(return) };
 		};
 		^return;
+	}
+
+
+	getSlice { arg slice;
+		var slice_key = if (slice.isNumber) { "%-%".format(key, slice).asSymbol } { slice };
+		^this.slice_cache[slice_key];
+	}
+
+	getBufSlice { arg slice, action;
+		var slice_cache = this.getSlice(slice);
+		^Buffer.read(s, this.bufferPath, slice_cache[1], slice_cache[0], action);
+	}
+
+	getBufSliceMonos { arg slice, action;
+		var slice_cache = this.getSlice(slice);
+		//var bufs;
+		^[
+			Buffer.readChannel(s, this.bufferPath, slice_cache[1], slice_cache[0], channels:[0]),
+			Buffer.readChannel(s, this.bufferPath, slice_cache[1], slice_cache[0], channels:[1], action: action)
+		];
 	}
 
 	chainFlatten { arg buf, ds, slice_index;
@@ -721,7 +752,7 @@ FluidModel {
 		var scaler_tree;
 		forkIfNeeded {
 			if (files.isString) {
-				if (PathName(files).isFolder) {
+				if (files.isFolder) {
 					buffer = this.loadFolder(files);
 				} {
 					buffer = this.loadSingleFile(files);
@@ -743,6 +774,7 @@ FluidModel {
 					datasets_info[k] = (cols: count);
 				})
 			};
+			"Merging datasets...".postln;
 			datasets.merged = this.mergeDatasets;
 			s.sync;
 
@@ -754,12 +786,13 @@ FluidModel {
 			//kdtree = scaler_tree[1];
 			//scaled_dataset = scaler_tree[2];
 			//lookup = this.makeLookup;
-
+			"Calculating NMF...".postln;
 			this.calculateNMF(60, 8, {action.(this)});
 
 			//if (action.notNil) {
 			//	action.(this);
 			//};
+			"Done with building the model".postln;
 		}
 	}
 
@@ -767,6 +800,7 @@ FluidModel {
 		var model = this;
 		var name = key;
 		path.mkdir;
+		File.use(path +/+ "config.fluidity".format(name), "w", {|f| f.write(name)});
 		model.buffer.write(path +/+ "%.aiff".format(name));
 		model.mono.write(path +/+ "%_mono.aiff".format(name));
 		model.slices.write(path +/+ "%_slices.aiff".format(name), "aiff", "float");
@@ -786,13 +820,16 @@ FluidModel {
 		"Stored % in %".format(name, path).postln;
 	}
 
-	load { arg path, loadDatasets=true;
+	load { arg path, loadAudioBuffers=true, loadDatasets=true;
 		var name = key;
-		buffer = Buffer.read(s, path +/+ "%.aiff".format(name));
+		bufferPath = path +/+ "%.aiff".format(name);
 		monos = [nil,nil];
-		monos[0] = Buffer.readChannel(s, path +/+ "%.aiff".format(name), channels:[0]);
-		monos[1] = Buffer.readChannel(s, path +/+ "%.aiff".format(name), channels:[1]);
-		mono = Buffer.read(s, path +/+ "%_mono.aiff".format(name));
+		if (loadAudioBuffers) {
+			buffer = Buffer.read(s, bufferPath);
+			monos[0] = Buffer.readChannel(s, path +/+ "%.aiff".format(name), channels:[0]);
+			monos[1] = Buffer.readChannel(s, path +/+ "%.aiff".format(name), channels:[1]);
+			mono = Buffer.read(s, path +/+ "%_mono.aiff".format(name));
+		};
 		nmf_bases = Buffer.read(s, path +/+ "%_nmf_bases.aiff".format(name));
 		slices = Buffer.read(s, path +/+ "%_slices.aiff".format(name));
 		if (loadDatasets) {
@@ -928,12 +965,15 @@ FluiditySimplePlayer {
 	}
 
 	get {
-		^{ arg corpus, slice;
+		^{ arg corpus, slice, loop=false;
 			var info = corpus.slice_cache[slice.asSymbol];
 			{
+				var dur = info[0]/corpus.mono.sampleRate;
+				var trig = Impulse.kr(dur.reciprocal);
+				var loopv = if (loop) { 0 } { 2 };
 				Splay.ar(
-					PlayBuf.ar(corpus.buffer.numChannels, corpus.buffer, 1, 1, info[1]) *
-					Env.new([0,1,1,0], [atk,1-(atk + rls),rls], [catk, 1, crls]).ar(2, 1, info[0]/corpus.mono.sampleRate),
+					PlayBuf.ar(corpus.buffer.numChannels, corpus.buffer, 1, trig, info[1]) *
+					Env.new([0,1,1,0], [atk,1-(atk + rls),rls], [catk, 1, crls]).ar(loopv, trig, dur),
 					1
 				) * amp
 			}.play
