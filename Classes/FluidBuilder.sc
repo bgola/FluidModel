@@ -752,7 +752,7 @@ FluidModel {
 		var scaler_tree;
 		forkIfNeeded {
 			if (files.isString) {
-				if (files.isFolder) {
+				if (PathName(files).isFolder) {
 					buffer = this.loadFolder(files);
 				} {
 					buffer = this.loadSingleFile(files);
