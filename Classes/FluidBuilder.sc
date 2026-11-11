@@ -55,7 +55,7 @@ FluidModel {
 	*load { arg path, loadAudioBuffers=true;
 		var config = File.new(path +/+ "config.fluidity", "r");
 		var name = config.readAllString.stripWhiteSpace;
-		var model = FluidModel(name);
+		var model = FluidModel(name.asSymbol);
 		model.load(path, loadAudioBuffers);
 		^model;
 	}
@@ -544,9 +544,7 @@ FluidModel {
 					redux.find([x,y], action);
 				});
 
-				if (upAction.isNil) { upAction = {} };
-
-				plotter.userView.mouseUpAction_(upAction);
+				if (upAction.notNil) { plotter.userView.mouseUpAction = plotter.userView.mouseUpAction.addFunc(upAction) };
 				ret[\plotter] = plotter;
 
                  forkIfNeeded {
@@ -581,15 +579,15 @@ FluidModel {
 
 		# col, condition, value = queries[0].split($ );
 		col = columns.indexOf(col.asSymbol);
-		fquery.filter(col, condition.asSymbol, value.asNumberIfPossible);
+		fquery.filter(col, condition.asSymbol, value.asFloat);
 		queries[1..].do {|query|
 			var or;
 			# or, col, condition, value = query.split($ );
 			col = columns.indexOf(col.asSymbol);
 			if (or.toLower == "or") {
-				fquery.or(col, condition.asSymbol, value.asNumberIfPossible);
+				fquery.or(col, condition.asSymbol, value.asFloat);
 			} {
-				fquery.and(col, condition.asSymbol, value.asNumberIfPossible);
+				fquery.and(col, condition.asSymbol, value.asFloat);
 			}
 		};
 		fquery.transform(srcDataset, ds, action);
@@ -755,7 +753,9 @@ FluidModel {
 				if (PathName(files).isFolder) {
 					buffer = this.loadFolder(files);
 				} {
-					buffer = this.loadSingleFile(files);
+					var single = Buffer.read(s, files);
+					s.sync;
+					buffer = this.loadMultiple([single]);
 				};
 			} {
 				buffer = this.loadMultiple(files);
@@ -892,12 +892,12 @@ FluidModelComposer {
 		this.prMergeModels;
 	}
 
-	plot { arg dataset, algo=\pca, grid=1, action;
-		^this.model.plot(dataset, algo, grid, action);
+	plot { arg dataset, algo=\pca, grid=1, action, neighbors=1;
+		^this.model.plot(dataset, algo, grid, neighbors, action);
 	}
 
-	reduceDimension { arg n, algo=\pca, dataset=nil, grid=0, action;
-		^this.model.reduceDimension(n, algo=\pca, dataset, grid=0, action);
+	reduceDimension { arg n, algo=\pca, dataset=nil, grid=0, action, neighbors=1;
+		^this.model.reduceDimension(n, algo, dataset, grid, neighbors, action);
 	}
 }
 
@@ -973,7 +973,7 @@ FluiditySimplePlayer {
 				var loopv = if (loop) { 0 } { 2 };
 				Splay.ar(
 					PlayBuf.ar(corpus.buffer.numChannels, corpus.buffer, 1, trig, info[1]) *
-					Env.new([0,1,1,0], [atk,1-(atk + rls),rls], [catk, 1, crls]).ar(loopv, trig, dur),
+					Env.new([0,1,1,0], [atk,1-(atk + rls),rls], [catk, 1, crls]).ar(loopv, if (loop) { trig } { 1 }, dur),
 					1
 				) * amp
 			}.play

@@ -1,0 +1,11 @@
+INSTANCEMETHODS::
+
+METHOD:: categories
+(Replaced by the FluidModel quark.) The FluCoMa version colours the points by the labels of a link::Classes/FluidLabelSet:: dump. The FluidModel version only checks the labels and redraws the plot: it does not change any colours. link::Classes/FluidModel#-plot:: colours its points itself, with code::pointColor_::.
+
+warning::
+Because the method is replaced for everyone, code::categories_:: does nothing useful while the FluidModel quark is installed, also in code that does not use FluidModel. Set colours point by point with code::pointColor_:: instead.
+::
+
+ARGUMENT:: labelSetDict
+A dictionary as passed to the action of link::Classes/FluidLabelSet#-dump::.

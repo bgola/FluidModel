@@ -1,0 +1,135 @@
+TITLE:: FluidModelComposer
+summary:: Join several FluidModels into one searchable corpus
+categories:: Libraries>FluidModel
+related:: Classes/FluidModel
+
+DESCRIPTION::
+A FluidModelComposer merges the datasets, labels and slice positions of several built (or loaded) link::Classes/FluidModel::s into a new FluidModel, link::#-model::, so that slices from all of them can be plotted, searched and filtered together. Nothing is re-analysed and no audio is copied.
+
+Slice identifiers keep the key of the model they come from (code::'drums-3'::, code::'voice-12'::), so the actions of the merged model's link::Classes/FluidModel#-plot:: and link::Classes/FluidModel#-reduceDimension:: receive the emphasis::original:: model of each slice, whose link::Classes/FluidModel#-buffer:: and link::Classes/FluidModel#-getSlice:: give the audio. For this to work the models must have Symbol keys and be registered (link::Classes/FluidModel#*new::), and their keys must differ.
+
+note::
+The merge runs asynchronously; give it a moment (or code::s.sync::) before using link::#-model::. The merged model only has datasets, link::Classes/FluidModel#-labelset:: and link::Classes/FluidModel#-slice_cache::: it has no buffers, so call playback methods on the original models (as the action arguments do).
+::
+
+
+CLASSMETHODS::
+
+METHOD:: new
+Merge the models.
+
+ARGUMENT:: models
+An link::Classes/Array:: of link::Classes/FluidModel::s, all built or loaded.
+
+returns:: A FluidModelComposer.
+
+INSTANCEMETHODS::
+
+METHOD:: model
+The merged link::Classes/FluidModel::, registered under the String key code::"merged-<key1>_<key2>..."::.
+
+METHOD:: models
+The Array of source models.
+
+METHOD:: plot
+Plot the merged model: same as code::model.plot(dataset, algo, grid, neighbors, action):: (see link::Classes/FluidModel#-plot::), with a grid by default. Use code::model.plot:: directly for an code::upAction::.
+
+ARGUMENT:: dataset
+Dataset name, Array of names, link::Classes/FluidDataSet:: or code::nil:: (code::\merged::).
+
+ARGUMENT:: algo
+code::\pca::, code::\umap:: or code::\mds::.
+
+ARGUMENT:: grid
+Grid oversampling; 0 turns the grid off. Defaults to 1 here.
+
+ARGUMENT:: action
+As in link::Classes/FluidModel#-plot::: called with code::(model, slice)::, where code::model:: is the original model of the slice; without an action the nearest slice is posted.
+
+ARGUMENT:: neighbors
+Number of slices looked up per mouse position (with more than 1, code::action:: gets an Array of identifiers).
+
+returns:: An link::Classes/Event:: with code::\plotter:: and code::\redux::.
+
+METHOD:: reduceDimension
+Same as code::model.reduceDimension(n, algo, dataset, grid, neighbors, action):: (see link::Classes/FluidModel#-reduceDimension::).
+
+ARGUMENT:: n
+Number of dimensions.
+
+ARGUMENT:: algo
+code::\pca::, code::\umap:: or code::\mds::.
+
+ARGUMENT:: dataset
+Dataset name, Array of names, link::Classes/FluidDataSet:: or code::nil::.
+
+ARGUMENT:: grid
+Grid oversampling; 0 turns the grid off.
+
+ARGUMENT:: action
+Called with the result Event.
+
+ARGUMENT:: neighbors
+Number of slices returned by code::find::.
+
+returns:: An link::Classes/Event::, as link::Classes/FluidModel#-reduceDimension::.
+
+METHOD:: init
+Called by link::#*new::. Starts the merge.
+
+METHOD:: prMergeModels
+Private. Does the merge.
+
+EXAMPLES::
+
+code::
+// build two models from different folders (or load stored ones)
+(
+s.waitForBoot {
+	~drums = FluidModel(\drums);
+	~voice = FluidModel(\voice);
+	// one build at a time
+	~drums.build("/path/to/drums", action: {
+		"drums ready".postln;
+		~voice.build("/path/to/voices", action: { "voices ready".postln });
+	});
+};
+)
+
+// when both are ready
+~both = FluidModelComposer([~drums, ~voice]);
+
+~both.model.datasets[\merged].print;
+~both.model.labelset.print;
+
+// play a slice from the model it belongs to
+(
+SynthDef(\fluidSlice2, { |out = 0, buf, start = 0, dur = 0.2, amp = 0.3|
+	var env = EnvGen.kr(Env([0, 1, 1, 0], [0.005, dur - 0.01, 0.005]), doneAction: 2);
+	Out.ar(out, PlayBuf.ar(2, buf, BufRateScale.kr(buf), startPos: start) * env * amp);
+}).add;
+
+~playFrom = { |model, slice|
+	var info = model.getSlice(slice);
+	Synth(\fluidSlice2, [buf: model.buffer, start: info[1], dur: info[0] / model.buffer.sampleRate]);
+};
+)
+
+// one map for both corpora; the action gets the model each slice comes from
+(
+var last;
+~both.model.plot([\mfcc, \spectralShape], \umap, action: { |model, slice|
+	if (slice != last) { last = slice; ~playFrom.(model, slice) };
+});
+)
+
+// navigate it from code
+~redux = ~both.reduceDimension(2, \pca, \mfcc, action: { "map ready".postln });
+~redux.find([0.2, 0.8], { |model, slice| [model.key, slice].postln; ~playFrom.(model, slice) });
+
+// filters and sorts work across both corpora
+~quiet = ~both.model.filter(["loudness < -35"], action: { ~quiet.print });
+
+// the composer's own plot (grid on by default); without an action the nearest slice is posted
+~both.plot(\chroma);
+::

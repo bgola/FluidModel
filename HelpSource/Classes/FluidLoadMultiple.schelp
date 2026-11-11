@@ -1,0 +1,81 @@
+TITLE:: FluidLoadMultiple
+summary:: Join a list of Buffers end to end, like FluidLoadFolder
+categories:: Libraries>FluidModel
+related:: Classes/FluidLoadFolder, Classes/FluidModel, Classes/FluidLoadStore
+
+DESCRIPTION::
+FluidLoadMultiple does for a list of link::Classes/Buffer::s what link::Classes/FluidLoadFolder:: does for a folder of files: it allocates one buffer, copies the buffers into it one after another, and records where each one went in link::#-index::. link::Classes/FluidModel#-build:: uses it when it is given an Array of Buffers.
+
+The buffers must already be loaded, and they must have been read from files: each buffer's file name (code::buffer.path.basename::) becomes its identifier in link::#-index::, so two buffers read from files with the same name overwrite each other's entry, and a buffer without a path (made with code::Buffer.alloc::) causes an error.
+
+warning::
+All buffers must have the same number of channels. A buffer with fewer channels than the widest one is not copied, and its part of the joined buffer stays silent.
+::
+
+CLASSMETHODS::
+
+METHOD:: new
+ARGUMENT:: files
+An Array of loaded link::Classes/Buffer::s.
+
+ARGUMENT:: idFunc
+Not used at the moment (kept for compatibility with link::Classes/FluidLoadFolder::).
+
+ARGUMENT:: channelFunc
+Not used at the moment.
+
+returns:: A FluidLoadMultiple.
+
+INSTANCEMETHODS::
+
+METHOD:: play
+Allocate the joined buffer and copy the buffers into it. Runs in a Routine (forked if needed) and posts its progress.
+
+ARGUMENT:: server
+The server. Defaults to link::Classes/Server#*default::.
+
+ARGUMENT:: action
+Called with link::#-index:: when all buffers are copied.
+
+METHOD:: files
+The Array of source buffers.
+
+METHOD:: buffer
+The joined link::Classes/Buffer::.
+
+METHOD:: index
+An link::Classes/IdentityDictionary:: with one entry per source buffer, keyed by file name. Each entry is an IdentityDictionary with:
+definitionlist::
+## bounds || code::[startFrame, endFrame]:: of the buffer in the joined buffer
+## numchans || its number of channels
+## sr || its sample rate
+## path || its file path
+::
+
+EXAMPLES::
+
+code::
+s.boot;
+
+(
+~bufs = [
+	Buffer.read(s, FluidFilesPath("Tremblay-BeatRemember.wav")),
+	Buffer.read(s, FluidFilesPath("Tremblay-SA-UprightPianoPedalWide.wav"))
+];  // both stereo
+)
+
+(
+~loader = FluidLoadMultiple(~bufs);
+~loader.play(s, { |index|
+	index.keysValuesDo { |name, entry| "% %".format(name, entry[\bounds]).postln };
+});
+)
+
+{ PlayBuf.ar(2, ~loader.buffer, BufRateScale.kr(~loader.buffer)) * 0.3 }.play;
+
+// the usual way to use it: give the buffers to FluidModel
+(
+~model = FluidModel(\beatsAndPiano);
+~model.build(~bufs, action: { |m| "% slices".format(m.slice_cache.size).postln });
+)
+::

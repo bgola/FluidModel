@@ -1,0 +1,9 @@
+TITLE:: FluidModelAnalyser
+summary:: Placeholder for a configurable analysis stage (not implemented)
+categories:: Libraries>FluidModel
+related:: Classes/FluidModel, Classes/FluidModelSlicer
+
+DESCRIPTION::
+FluidModelAnalyser is an empty class, reserved for a future object that would choose and configure the analyses link::Classes/FluidModel:: runs on each slice, the way link::Classes/FluidModelSlicer:: does for slicing. It has no methods yet.
+
+The analysis is currently fixed: see link::Classes/FluidModel#-analyze:: and the Descriptors section of link::Classes/FluidModel::.

@@ -1,0 +1,212 @@
+TITLE:: FluidModelSlicer
+summary:: Choose and configure the slicer used by FluidModel
+categories:: Libraries>FluidModel
+related:: Classes/FluidModel, Classes/FluidBufNoveltySlice, Classes/FluidBufOnsetSlice, Classes/FluidBufAmpSlice, Classes/FluidBufTransientSlice
+
+DESCRIPTION::
+A FluidModelSlicer stores a FluCoMa buffer slicer together with its settings, so that a link::Classes/FluidModel:: can slice its corpus with it later. The class methods code::novelty::, code::onset::, code::amp:: and code::transient:: take the same arguments, with the same defaults, as the code::process:: methods of the matching FluCoMa classes; see their help files for what each argument does.
+
+Set it on a model before calling link::Classes/FluidModel#-build:::
+
+code::
+~model = FluidModel(\beats);
+~model.slicer = FluidModelSlicer.onset(metric: 9, threshold: 0.1);
+::
+
+The slicer runs on the mono mix of the whole corpus, so slices can cross the border between two files. Only the audio between the first and the last slice point is analysed. If the slicer finds fewer than two points, link::Classes/FluidModel#-build:: never finishes, so try new settings with link::#-slice:: on a short buffer first (see the examples).
+
+CLASSMETHODS::
+
+METHOD:: new
+Wrap any slicer class.
+
+ARGUMENT:: slicerClass
+A class that responds to code::process(server, source, startFrame, numFrames, startChan, numChans, indices, ... settings, freeWhenDone, action)::, like the FluCoMa buffer slicers.
+
+ARGUMENT:: slicerArguments
+An Array of emphasis::all:: the settings that follow code::indices::, in order. They are passed by position, followed by code::freeWhenDone:: and code::action::, so a shorter Array puts those two in the wrong place and the slicer fails.
+
+returns:: A FluidModelSlicer.
+
+METHOD:: default
+The slicer a new link::Classes/FluidModel:: uses: code::novelty():: with its defaults.
+
+returns:: A FluidModelSlicer.
+
+METHOD:: novelty
+Slice where the sound changes, with link::Classes/FluidBufNoveltySlice::.
+
+ARGUMENT:: algorithm
+The feature whose changes are tracked: 0 spectrum, 1 MFCC, 2 chroma, 3 pitch, 4 loudness.
+
+ARGUMENT:: kernelSize
+How far around each point the change is measured, in hops (odd number). Larger values find slower changes.
+
+ARGUMENT:: threshold
+Novelty needed for a slice point, 0 to 1. Lower values give more slices.
+
+ARGUMENT:: filterSize
+Smoothing of the novelty curve, in hops.
+
+ARGUMENT:: minSliceLength
+Shortest slice, in hops.
+
+ARGUMENT:: windowSize
+FFT window size in samples.
+
+ARGUMENT:: hopSize
+FFT hop size; -1 means half the window.
+
+ARGUMENT:: fftSize
+FFT size; -1 means the window size rounded up to a power of two.
+
+returns:: A FluidModelSlicer.
+
+METHOD:: onset
+Slice at spectral onsets, with link::Classes/FluidBufOnsetSlice::.
+
+ARGUMENT:: metric
+How spectral frames are compared, 0 to 9 (see link::Classes/FluidBufOnsetSlice::; 9, rectified complex deviation, works well for most material).
+
+ARGUMENT:: threshold
+Difference needed for an onset. The range depends on the metric.
+
+ARGUMENT:: minSliceLength
+Shortest slice, in hops.
+
+ARGUMENT:: filterSize
+Smoothing of the difference curve, in frames.
+
+ARGUMENT:: frameDelta
+For metrics that compare a frame with an earlier one, how many samples earlier.
+
+ARGUMENT:: windowSize
+FFT window size in samples.
+
+ARGUMENT:: hopSize
+FFT hop size; -1 means half the window.
+
+ARGUMENT:: fftSize
+FFT size; -1 means the window size rounded up to a power of two.
+
+returns:: A FluidModelSlicer.
+
+METHOD:: amp
+Slice on amplitude envelopes, with link::Classes/FluidBufAmpSlice::: a slice starts when a fast envelope follower rises code::onThreshold:: dB above a slow one.
+
+ARGUMENT:: fastRampUp
+Rise time of the fast envelope follower, in samples.
+
+ARGUMENT:: fastRampDown
+Fall time of the fast envelope follower, in samples.
+
+ARGUMENT:: slowRampUp
+Rise time of the slow envelope follower, in samples.
+
+ARGUMENT:: slowRampDown
+Fall time of the slow envelope follower, in samples.
+
+ARGUMENT:: onThreshold
+Difference between the followers (dB) that starts a slice.
+
+ARGUMENT:: offThreshold
+Difference between the followers (dB) that ends it.
+
+ARGUMENT:: floor
+Level in dB below which the input is ignored.
+
+ARGUMENT:: minSliceLength
+Shortest slice, in samples.
+
+ARGUMENT:: highPassFreq
+Cutoff of the high-pass filter applied before the envelope followers, in Hz.
+
+returns:: A FluidModelSlicer.
+
+METHOD:: transient
+Slice at transients, with link::Classes/FluidBufTransientSlice::.
+
+ARGUMENT:: order
+Order of the autoregressive model.
+
+ARGUMENT:: blockSize
+Analysis block size in samples.
+
+ARGUMENT:: padSize
+Padding around each block, in samples.
+
+ARGUMENT:: skew
+Bias towards (positive) or away from (negative) detecting transients.
+
+ARGUMENT:: threshFwd
+Forward error threshold.
+
+ARGUMENT:: threshBack
+Backward error threshold.
+
+ARGUMENT:: windowSize
+Size of the error-smoothing window, in samples.
+
+ARGUMENT:: clumpLength
+Transients closer than this, in samples, are merged.
+
+ARGUMENT:: minSliceLength
+Shortest slice, in samples.
+
+returns:: A FluidModelSlicer.
+
+INSTANCEMETHODS::
+
+METHOD:: slice
+Slice a whole buffer on link::Classes/Server#*default::.
+
+ARGUMENT:: source
+The link::Classes/Buffer:: to slice (link::Classes/FluidModel:: passes its mono mix).
+
+ARGUMENT:: indices
+A link::Classes/Buffer:: that receives the slice points, in frames.
+
+ARGUMENT:: action
+Called when slicing is done, with the code::indices:: buffer.
+
+returns:: The FluCoMa processor that does the work.
+
+EXAMPLES::
+
+code::
+s.boot;
+
+// try settings on one file before building a model with them
+(
+~test = Buffer.readChannel(s, FluidFilesPath("Nicol-LoopE-M.wav"), channels: [0]);
+~try = { |slicer|
+	var indices = Buffer(s);
+	slicer.slice(~test, indices, { |idx|
+		idx.loadToFloatArray(action: { |points|
+			"% slice points, every % s on average".format(
+				points.size, (~test.duration / points.size.max(1)).round(0.01)
+			).postln;
+		});
+	});
+};
+)
+
+~try.(FluidModelSlicer.default);
+~try.(FluidModelSlicer.novelty(algorithm: 1, kernelSize: 31, threshold: 0.35));
+~try.(FluidModelSlicer.onset(metric: 9, threshold: 0.1));
+~try.(FluidModelSlicer.amp(fastRampUp: 10, fastRampDown: 2205, slowRampUp: 4410, slowRampDown: 4410,
+	onThreshold: 10, offThreshold: 5, floor: -40, minSliceLength: 4410, highPassFreq: 20));
+~try.(FluidModelSlicer.transient(threshFwd: 1.5, minSliceLength: 4410));
+
+// then build a model with the chosen one
+(
+~model = FluidModel(\loops);
+~model.slicer = FluidModelSlicer.onset(metric: 9, threshold: 0.1);
+~model.build(FluidFilesPath(), action: { |m| "% slices".format(m.slice_cache.size).postln });
+)
+
+// any class with the FluCoMa process interface can be wrapped
+// (list every setting: algorithm, kernelSize, threshold, filterSize, minSliceLength, windowSize, hopSize, fftSize)
+~slicer = FluidModelSlicer(FluidBufNoveltySlice, [0, 9, 0.2, 1, 2, 1024, -1, -1]);
+~try.(~slicer);
+::

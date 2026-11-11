@@ -1,0 +1,659 @@
+TITLE:: FluidModel
+summary:: Slice, analyse, explore and play an audio corpus with FluCoMa
+categories:: Libraries>FluidModel
+related:: Classes/FluidModelSlicer, Classes/FluidModelComposer, Classes/FluiditySimplePlayer, Classes/FluidLoadMultiple, Classes/FluidLoadStore, Classes/FluidDataSet, Classes/FluidPlotter
+
+DESCRIPTION::
+A FluidModel turns a folder of sound files (or a list of link::Classes/Buffer::s) into a searchable corpus of slices. One call to link::#-build:: runs the whole pipeline on the server, using the FluCoMa library:
+
+numberedlist::
+## load every file end to end into one buffer (link::#-buffer::), plus a mono mix (link::#-mono::) and the two channels as separate mono buffers (link::#-monos::);
+## cut the mono mix into slices with a link::Classes/FluidModelSlicer:: (novelty slicing by default);
+## describe every slice with seven link::Classes/FluidDataSet::s (mean values over the slice): MFCC, chroma, pitch, spectral shape, loudness, duration and slice position, and join them into a strong::merged:: dataset;
+## label every slice with the name of the file it starts in (link::#-labelset::);
+## learn 8 NMF spectral templates from a 60 second sample of the corpus (link::#-nmf_bases::).
+::
+
+Once built, a model can be plotted in 2-D (PCA, UMAP or MDS) and explored with the mouse (link::#-plot::), navigated from code (link::#-reduceDimension::), filtered and sorted by descriptor values (link::#-filter::, link::#-sort::, link::#-subset::), played (link::#-play::, link::#-getSlice::) and stored to disk (link::#-store::, link::#-load::).
+
+subsection:: Slice identifiers
+Every slice is identified by a Symbol of the form code::'<key>-<index>'::, for example code::'flucoma-12'::: the model's link::#-key::, a dash, and the slice index counted from 0. These identifiers are the keys of every dataset, of link::#-labelset:: and of link::#-slice_cache::, and they are what link::#-plot:: and link::#-reduceDimension:: hand to your actions.
+
+subsection:: Descriptors
+link::#*queryFeatures:: lists the column names of each dataset. All spectral descriptors are means over the slice.
+
+table::
+## strong::dataset:: || strong::columns::
+## code::\mfcc:: || code::mfcc_0:: to code::mfcc_12:: (13 coefficients, the 0th energy coefficient is skipped)
+## code::\chroma:: || code::chroma_0:: to code::chroma_11::
+## code::\pitch:: || code::pitch:: (Hz), code::confidence:: (0 to 1)
+## code::\spectralShape:: || code::centroid::, code::spread::, code::skewness::, code::kurtosis::, code::rolloff::, code::flatness::, code::crest::
+## code::\loudness:: || code::loudness::, code::peak:: (dBFS)
+## code::\duration:: || code::duration:: (seconds)
+## code::\slice_info:: || code::frames::, code::start::, code::end:: (frames in link::#-buffer::), code::slice_index::, code::file:: (index into code::loader.files::)
+## code::\merged:: || all of the above (42 columns), datasets joined in alphabetical order of their names
+::
+
+note::
+The code::\merged:: dataset includes the code::\slice_info:: and code::\duration:: columns, so a map of code::\merged:: is partly a map of emphasis::where:: a slice sits in the corpus. To map sound only, pass a list of datasets such as code::[\mfcc, \spectralShape]:: to link::#-plot:: or link::#-reduceDimension::.
+::
+
+subsection:: Asynchronous behaviour
+Most methods send work to the server and return before it is done. Methods that block (link::#-build::, link::#-loadFolder::, link::#-slice::, link::#-analyze::, link::#-mergeDatasets:: ...) must run inside a link::Classes/Routine::; link::#-build:: and link::#-reduceDimension:: fork one for you if needed. Methods that return an link::Classes/Event:: (link::#-reduceDimension::, link::#-plot::, link::#-sort::) fill it in later; use their code::action:: argument to know when the result is ready.
+
+Requires the FluCoMa extension (link::Classes/FluidDataSet::) and a booted server (link::Classes/Server#*default::).
+
+CLASSMETHODS::
+
+METHOD:: new
+Return the model registered under code::key::, or create and register a new one.
+
+ARGUMENT:: key
+A link::Classes/Symbol:: naming the model. It prefixes every slice identifier, names the files written by link::#-store::, and is used to find the model again from a slice identifier. Always give a key: models are looked up by identity, so use a Symbol (not a String) and avoid code::nil::.
+
+returns:: A FluidModel.
+
+discussion::
+code::
+FluidModel(\drums) === FluidModel(\drums); // -> true
+::
+
+METHOD:: load
+Create a model from a folder written by link::#-store::. The key is read from the file code::config.fluidity:: in that folder.
+
+ARGUMENT:: path
+The folder passed to link::#-store::.
+
+ARGUMENT:: loadAudioBuffers
+If code::false::, the audio buffers (link::#-buffer::, link::#-mono::, link::#-monos::) are not read, which saves memory when only the datasets are needed. Playback methods will not work.
+
+returns:: A FluidModel, registered under the stored key (so code::FluidModel(\name):: finds it afterwards).
+
+METHOD:: all
+An link::Classes/Event:: of all models created so far, by key.
+
+METHOD:: queryFeatures
+An link::Classes/Event:: mapping each dataset name to the names of its columns (see Descriptors above). link::#-filter::, link::#-subset:: and link::#-sort:: use these names.
+
+code::
+FluidModel.queryFeatures[\spectralShape];
+FluidModel.queryFeatures[\merged].size; // -> 42
+::
+
+
+INSTANCEMETHODS::
+
+subsection:: Building
+
+METHOD:: build
+Load, slice and analyse a corpus. Runs in a Routine (forked if needed) and posts its progress.
+
+ARGUMENT:: files
+A String path to a folder of sound files (every file is loaded with link::Classes/FluidLoadFolder::), a String path to a single sound file, or an link::Classes/Array:: of link::Classes/Buffer::s already read from disk (a single file and Buffers are loaded with link::Classes/FluidLoadMultiple::).
+
+warning::
+With an Array of Buffers, all buffers must have the same number of channels: link::Classes/FluidLoadMultiple:: leaves the narrower ones silent.
+::
+
+ARGUMENT:: preSlices
+Optional link::Classes/Buffer:: of slice points (frame positions in the joined corpus, as written by the FluCoMa slicers). If given, the slicer is skipped. Only the audio between the first and the last point is analysed.
+
+ARGUMENT:: num_threads
+Number of routines sharing the analysis. Leave it at 1: the server runs the analyses one after another anyway, so more threads do not make the build faster, and with 4 or more the build was seen to stop and never call code::action::.
+
+ARGUMENT:: action
+Called with the model when the build is finished (after the NMF templates are computed).
+
+discussion::
+The slicer is set with link::#-slicer:: before calling build. If it finds fewer than two slice points the analysis never finishes, so check the slicer settings on a short file first (see link::Classes/FluidModelSlicer::).
+
+METHOD:: slicer
+Get or set the link::Classes/FluidModelSlicer:: used by link::#-build::. Defaults to code::FluidModelSlicer.default:: (novelty slicing).
+
+code::
+~model = FluidModel(\beats);
+~model.slicer = FluidModelSlicer.onset(metric: 9, threshold: 0.1);
+::
+
+METHOD:: calculateNMF
+Learn spectral templates from a sample of the corpus (see link::#-sampleCorpus::) with link::Classes/FluidBufNMF::, and store them in link::#-nmf_bases::. link::#-build:: calls code::calculateNMF(60, 8)::.
+
+ARGUMENT:: sample_duration
+Length in seconds of the corpus sample to analyse.
+
+ARGUMENT:: nbases
+Number of templates (NMF components).
+
+ARGUMENT:: action
+Called when the templates are ready.
+
+ARGUMENT:: iterations
+NMF iterations.
+
+METHOD:: sampleCorpus
+Make a mono buffer of code::duration:: seconds that takes a slice from the middle of every file, each file contributing in proportion to its length.
+
+ARGUMENT:: duration
+Length of the result in seconds. Should be shorter than the corpus.
+
+ARGUMENT:: action
+Called with the new link::Classes/Buffer:: when it is filled.
+
+returns:: The link::Classes/Buffer:: (filled asynchronously).
+
+subsection:: Exploring
+
+METHOD:: plot
+Reduce a dataset to two dimensions, show it in a link::Classes/FluidPlotter:: window coloured by source file, and look up the nearest slice while the mouse is pressed or dragged.
+
+ARGUMENT:: dataset
+What to plot: code::nil:: for code::\merged::, a dataset name (code::\mfcc::), an link::Classes/Array:: of names (code::[\mfcc, \chroma]::, merged before plotting), or a link::Classes/FluidDataSet:: whose identifiers are slices of this model (for example the result of link::#-filter::). With a dataset that holds only some of the slices, the colouring posts a "setColor_ identifier not found" warning for every slice that is not in it; the plot itself is fine.
+
+ARGUMENT:: algo
+code::\pca::, code::\umap:: or code::\mds::. See link::#-reduceDimension::.
+
+ARGUMENT:: grid
+code::0:: plots the reduced points as they are. A value above 0 spreads them onto a regular grid with link::Classes/FluidGrid:: (the value is its code::oversample:: factor).
+
+ARGUMENT:: neighbors
+Number of slices looked up per mouse position. See the code::action:: argument.
+
+ARGUMENT:: action
+Called for every mouse press or drag. With code::neighbors:: 1 it is called with code::(model, slice)::: the model that owns the slice and the slice identifier. With more neighbours it is called with an Array of identifiers. If code::nil::, the file, start time and duration of the nearest slice are posted.
+
+ARGUMENT:: upAction
+Function added to the plotter's code::mouseUpAction:: (after FluidPlotter's own handler, so Alt-drag zoom and Ctrl-click reset keep working), called with code::(view, x, y, modifiers, buttonNumber, clickCount)::.
+
+returns:: An link::Classes/Event:: with keys code::\plotter:: (the link::Classes/FluidPlotter::, set when the window opens) and code::\redux:: (see link::#-reduceDimension::).
+
+METHOD:: reduceDimension
+Normalize a dataset, reduce it to code::n:: dimensions, normalize the result to 0..1 and fit a link::Classes/FluidKDTree:: to it, so that any point in the reduced space can be mapped to the nearest slices.
+
+ARGUMENT:: n
+Number of output dimensions.
+
+ARGUMENT:: algo
+code::\pca:: (link::Classes/FluidPCA::, fast and deterministic), code::\umap:: (link::Classes/FluidUMAP:: with 5 neighbours and 1300 iterations, slower, keeps local similarity) or code::\mds:: (link::Classes/FluidMDS::).
+
+ARGUMENT:: dataset
+As in link::#-plot::.
+
+ARGUMENT:: grid
+As in link::#-plot::. Only for code::n:: = 2.
+
+ARGUMENT:: neighbors
+Number of slices returned by code::find::.
+
+ARGUMENT:: action
+Called with the result Event when the server has been sent all the work.
+
+returns:: An link::Classes/Event:: (filled when the work is sent; immediately if called inside a Routine) with:
+definitionlist::
+## dataset || the reduced, normalized link::Classes/FluidDataSet::
+## algo || the fitted reducer (link::Classes/FluidPCA::, link::Classes/FluidUMAP:: or link::Classes/FluidMDS::)
+## norm || the link::Classes/FluidNormalize:: fitted to the reducer's output
+## tree || the link::Classes/FluidKDTree:: fitted to code::dataset::
+## find || a method: code::redux.find(coordinates, action):: looks up the slice nearest to code::coordinates:: (an Array of code::n:: values from 0 to 1) and calls code::action:: like the action of link::#-plot::. It posts the coordinates.
+::
+
+METHOD:: filter
+Select the slices whose descriptor values meet one or more conditions.
+
+ARGUMENT:: queries
+An Array of Strings. The first one is code::"column condition value"::, the following ones start with code::and:: or code::or::: code::["loudness > -30", "and confidence > 0.7"]::. Columns are names from link::#*queryFeatures::, conditions are code::==::, code::!=::, code::<::, code::<=::, code::>::, code::>=::. Words are separated by single spaces.
+
+ARGUMENT:: srcDataset
+A dataset with the code::\merged:: layout. Defaults to code::datasets[\merged]::.
+
+ARGUMENT:: action
+Called when the result is ready.
+
+returns:: A new link::Classes/FluidDataSet:: with the code::\merged:: layout, holding only the matching slices.
+
+warning::
+An unknown column name gives an empty dataset rather than an error.
+::
+
+METHOD:: subset
+Copy only some descriptor groups from a dataset with the code::\merged:: layout.
+
+ARGUMENT:: ds
+The source link::Classes/FluidDataSet:: (code::\merged:: layout, e.g. code::datasets[\merged]:: or a link::#-filter:: result).
+
+ARGUMENT:: keys
+Array of dataset names, e.g. code::[\loudness, \pitch]::. The result has their columns in alphabetical order of the names.
+
+ARGUMENT:: action
+Called when the result is ready.
+
+returns:: A new link::Classes/FluidDataSet::.
+
+METHOD:: sort
+Read a dataset into the language and sort its slices by one descriptor.
+
+ARGUMENT:: ds
+The link::Classes/FluidDataSet:: to sort.
+
+ARGUMENT:: feature
+The column to sort by, a Symbol from link::#*queryFeatures::.
+
+ARGUMENT:: order
+code::\asc:: or code::\desc::.
+
+ARGUMENT:: shape
+The layout of code::ds::: a dataset name or an Array of names (code::nil:: means code::\merged::). It must match how code::ds:: was made: code::\loudness:: for code::datasets[\loudness]::, code::nil:: for a link::#-filter:: result, the code::keys:: of a link::#-subset::.
+
+ARGUMENT:: action
+Called with the sorted Array. Each element is an link::Classes/Event:: holding the slice identifier under code::\key:: and one entry per column, e.g. code::(key: "flucoma-3", loudness: -19.1, peak: -9.5)::. The identifier is a String here: convert it with code::.asSymbol:: before passing it to link::#-getSlice::, link::#-play:: or link::#-combineSlices::.
+
+returns:: An link::Classes/Event:: whose code::\result:: is set to the sorted Array when it is ready.
+
+METHOD:: export
+Copy all datasets into the language, one entry per slice.
+
+returns:: An link::Classes/Array:: with one link::Classes/Event:: per slice (index = slice index). Each Event maps dataset names to that slice's values, plus code::\chromaClass::, the index of the strongest chroma bin. The Array is filled by a Routine that posts its progress; it is complete when code::exporting merged:: has been posted.
+
+METHOD:: mergeDatasets
+Join several of the model's datasets column-wise. Blocks, so call it in a Routine.
+
+ARGUMENT:: keys
+Array of dataset names. Defaults to all datasets except code::\merged::. Joined in alphabetical order.
+
+returns:: A new link::Classes/FluidDataSet::.
+
+subsection:: Playing
+
+METHOD:: play
+Play one slice once, with the default link::Classes/FluiditySimplePlayer::.
+
+ARGUMENT:: slice
+The slice identifier, e.g. code::'flucoma-12':: (a number does not work here, see link::#-getSlice::).
+
+METHOD:: getSlice
+Return the position of a slice in link::#-buffer::.
+
+ARGUMENT:: slice
+A slice index (Integer) or identifier (Symbol).
+
+returns:: code::[numFrames, startFrame, endFrame, sliceIndex, fileIndex]::, or code::nil::.
+
+METHOD:: getBufSlice
+Read one slice from the corpus file into a new buffer.
+
+ARGUMENT:: slice
+Slice index or identifier.
+
+ARGUMENT:: action
+Passed to link::Classes/Buffer#*read::.
+
+returns:: A link::Classes/Buffer::.
+
+note::
+Reads from link::#-bufferPath::, which only exists for stereo corpora (it is a file written during link::#-build::) or for a model read with link::#-load::.
+::
+
+METHOD:: getBufSliceMonos
+Like link::#-getBufSlice::, but reads the left and right channels into two mono buffers.
+
+ARGUMENT:: slice
+Slice index or identifier.
+
+ARGUMENT:: action
+Called when the second buffer is read.
+
+returns:: An Array of two link::Classes/Buffer::s.
+
+METHOD:: combineSlices
+Copy several slices one after another into a new buffer.
+
+ARGUMENT:: slices
+Array of slice identifiers.
+
+ARGUMENT:: action
+Called with the result Event once the copies are done.
+
+returns:: An link::Classes/Event:: with code::\buffer:: (the new link::Classes/Buffer::) and code::\slices::, which maps each identifier to code::[numFrames, startFrame, endFrame]:: in the new buffer.
+
+subsection:: Storing
+
+METHOD:: store
+Write the model to a folder: the audio buffers, the slice points, every dataset and the labelset (JSON), the NMF templates, the loader information and the slice cache. The folder is created if needed.
+
+ARGUMENT:: path
+Folder to write to.
+
+METHOD:: load
+Read a model written by link::#-store:: into this instance. The files are found by this model's link::#-key::, so use the key the model was stored with. Buffers and datasets are read asynchronously: wait for the posted code::done:: messages (or code::s.sync::) before using them.
+
+ARGUMENT:: path
+Folder to read from.
+
+ARGUMENT:: loadAudioBuffers
+If code::false::, skip the audio buffers.
+
+ARGUMENT:: loadDatasets
+If code::false::, skip the datasets and the labelset.
+
+subsection:: State
+
+METHOD:: key
+The model's name (see link::#*new::).
+
+METHOD:: buffer
+The whole corpus, all files end to end, with as many channels as the widest file.
+
+METHOD:: mono
+A mono mix of link::#-buffer::. This is what is sliced and analysed.
+
+METHOD:: monos
+The first two channels of link::#-buffer:: as two mono buffers (both are link::#-buffer:: itself for a mono corpus).
+
+METHOD:: bufferPath
+Path of the sound file that link::#-getBufSlice:: reads from.
+
+METHOD:: slices
+A link::Classes/Buffer:: of slice points, in frames.
+
+METHOD:: slice_cache
+An link::Classes/Event:: mapping slice identifiers to code::[numFrames, startFrame, endFrame, sliceIndex, fileIndex]::.
+
+METHOD:: datasets
+An link::Classes/Event:: of the model's link::Classes/FluidDataSet::s, by name (see Descriptors above).
+
+METHOD:: datasets_info
+An link::Classes/Event:: with the number of columns of each dataset, e.g. code::(mfcc: (cols: 13), ...)::.
+
+METHOD:: labelset
+A link::Classes/FluidLabelSet:: mapping each slice identifier to the name of the file it starts in.
+
+METHOD:: loader
+The loader used by link::#-build:: (a link::Classes/FluidLoadFolder:: or link::Classes/FluidLoadMultiple::), or a link::Classes/FluidLoadStore:: after link::#-load::. code::loader.files:: and code::loader.index:: tell which file each region of link::#-buffer:: came from.
+
+METHOD:: nmf_bases
+A link::Classes/Buffer:: of NMF spectral templates (one channel per template), for use with link::Classes/FluidNMFMatch:: or link::Classes/FluidNMFFilter::.
+
+METHOD:: server
+The server the model lives on (link::Classes/Server#*default:: at creation).
+
+METHOD:: s
+Same as link::#-server::.
+
+METHOD:: scaler, kdtree, scaled_dataset, lookup
+Not used at the moment (always code::nil::).
+
+subsection:: Pipeline steps
+These are the steps link::#-build:: runs in order. They act on the model's state, block until done and must run inside a Routine. Call them yourself only to rerun one step.
+
+METHOD:: loadFolder
+Load every sound file in a folder with link::Classes/FluidLoadFolder::.
+ARGUMENT:: folder
+Path of the folder.
+returns:: The joined link::Classes/Buffer::.
+
+METHOD:: loadMultiple
+Join an Array of Buffers with link::Classes/FluidLoadMultiple::.
+ARGUMENT:: files
+Array of link::Classes/Buffer::s.
+returns:: The joined link::Classes/Buffer::.
+
+METHOD:: loadBothMono
+Split a stereo link::#-buffer:: into two mono buffers (going through a temporary file, which becomes link::#-bufferPath::).
+returns:: An Array of two link::Classes/Buffer::s.
+
+METHOD:: toMono
+Mix link::#-buffer:: down to mono.
+returns:: A link::Classes/Buffer::.
+
+METHOD:: slice
+Slice link::#-mono:: with link::#-slicer::.
+returns:: A link::Classes/Buffer:: of slice points.
+
+METHOD:: analyze
+Analyse every slice in link::#-slices:: and refill link::#-labelset:: and link::#-slice_cache::.
+ARGUMENT:: num_threads
+See link::#-build::.
+returns:: An link::Classes/Event:: of new datasets (without code::\merged::).
+
+METHOD:: chainMFCC, chainChroma, chainPitch, chainShape, chainLoudness
+Per-slice analysis steps called by link::#-analyze::. Each computes one descriptor of link::#-mono:: over one slice, takes the mean over the slice (see link::#-chainFlatten::) and adds it to the matching dataset.
+ARGUMENT:: buf
+A scratch link::Classes/Buffer:: for the descriptor frames.
+ARGUMENT:: start_frame
+First frame of the slice.
+ARGUMENT:: num_frames
+Length of the slice in frames.
+ARGUMENT:: slice_index
+Index of the slice.
+ARGUMENT:: dss
+The Event of datasets being filled.
+
+METHOD:: chainDuration
+Add the slice duration in seconds to the code::\duration:: dataset.
+ARGUMENT:: buf
+A one-frame scratch link::Classes/Buffer::.
+ARGUMENT:: num_frames
+Length of the slice in frames.
+ARGUMENT:: slice_index
+Index of the slice.
+ARGUMENT:: dss
+The Event of datasets being filled.
+
+METHOD:: chainSliceInfo
+Add the slice position to the code::\slice_info:: dataset and to link::#-slice_cache::.
+ARGUMENT:: buf
+A five-frame scratch link::Classes/Buffer::.
+ARGUMENT:: start_frame
+First frame of the slice.
+ARGUMENT:: end_frame
+Frame after the slice.
+ARGUMENT:: num_frames
+Length of the slice in frames.
+ARGUMENT:: slice_index
+Index of the slice.
+ARGUMENT:: current_file
+Index of the file the slice starts in.
+ARGUMENT:: dss
+The Event of datasets being filled.
+
+METHOD:: chainFlatten
+Take the mean of each descriptor over the frames in code::buf:: and add it to a dataset as the point code::'<key>-<slice_index>'::.
+ARGUMENT:: buf
+Buffer of descriptor frames.
+ARGUMENT:: ds
+The link::Classes/FluidDataSet::.
+ARGUMENT:: slice_index
+Index of the slice.
+
+METHOD:: fitKDTree, makeLookup, reduce
+Unused leftovers from an earlier version of link::#-build::.
+
+METHOD:: prReduceDataset
+Private. Does the work of link::#-reduceDimension::.
+
+
+EXAMPLES::
+
+The examples use the sound files that come with FluCoMa. Run the blocks one at a time, waiting for each to finish.
+
+code::
+// 1. build a model (prints its progress; takes a while for a large folder)
+(
+s.waitForBoot {
+	~model = FluidModel(\flucoma);
+	~model.build(FluidFilesPath(), action: { |model|
+		"model ready: % slices".format(model.slice_cache.size).postln;
+	});
+};
+)
+
+// what is in it
+~model.datasets.keys;
+~model.datasets[\loudness].print;
+~model.labelset.print;
+~model.getSlice(0);  // [numFrames, startFrame, endFrame, sliceIndex, fileIndex]
+~model.play('flucoma-10');
+::
+
+A small player used by the following examples, with rate and pan. (link::#-play:: plays a slice with fixed settings.)
+
+code::
+(
+SynthDef(\fluidSlice, { |out = 0, buf, start = 0, dur = 0.2, rate = 1, amp = 0.3, pan = 0|
+	var env = EnvGen.kr(Env([0, 1, 1, 0], [0.005, (dur / rate) - 0.01, 0.005]), doneAction: 2);
+	var sig = PlayBuf.ar(2, buf, rate * BufRateScale.kr(buf), startPos: start);
+	Out.ar(out, Balance2.ar(sig[0], sig[1], pan, env * amp));
+}).add;
+
+~playSlice = { |slice, rate = 1, pan = 0|
+	var info = ~model.getSlice(slice);
+	Synth(\fluidSlice, [
+		buf: ~model.buffer, start: info[1], dur: info[0] / ~model.buffer.sampleRate,
+		rate: rate, pan: pan
+	]);
+};
+)
+
+~playSlice.(10);
+~playSlice.('flucoma-10', 0.5, -0.5);
+// (PlayBuf.ar(2) assumes a stereo corpus; the FluCoMa files are mixed mono and stereo, so the corpus is stereo)
+::
+
+Plotting: move the mouse over the window with the button pressed. Colours show the source files.
+
+code::
+// timbre map; play a slice whenever the nearest slice changes (long slices overlap)
+(
+var last;
+~plot = ~model.plot([\mfcc, \spectralShape], \pca, action: { |model, slice|
+	if (slice != last) { last = slice; ~playSlice.(slice) };
+});
+)
+
+// the same with UMAP, arranged on a grid
+(
+var last;
+~model.plot(\mfcc, \umap, grid: 1, action: { |model, slice|
+	if (slice != last) { last = slice; ~playSlice.(slice) };
+});
+)
+
+// plot by chroma; without an action the nearest slice is posted
+~model.plot(\chroma);
+
+// upAction: called on mouse release (Alt-drag still zooms, Ctrl-click resets)
+~model.plot(\mfcc, action: { |model, slice| model.play(slice) }, upAction: { "released".postln });
+::
+
+Navigating a 2-D map from code: here a slow circle through the timbre space.
+
+code::
+~redux = ~model.reduceDimension(2, \pca, [\mfcc, \spectralShape], action: { "map ready".postln });
+
+(
+~walk = Routine {
+	var last;
+	100.do { |i|
+		var x = 0.5 + (0.4 * cos(i * 0.1)), y = 0.5 + (0.4 * sin(i * 0.1));
+		~redux.find([x, y], { |model, slice|
+			if (slice != last) { last = slice; ~playSlice.(slice) };
+		});
+		0.15.wait;
+	};
+}.play;
+)
+~walk.stop;
+
+// several neighbours at once: the action gets an Array of identifiers
+~redux5 = ~model.reduceDimension(2, \pca, \mfcc, neighbors: 5);
+~redux5.find([0.5, 0.5], { |slices| slices.postln; slices.do { |sl| ~playSlice.(sl, 1, 1.0.rand2) } });
+::
+
+Querying by descriptor values:
+
+code::
+// loud slices with a clear pitch
+~pitched = ~model.filter(["loudness > -30", "and confidence > 0.7"], action: { ~pitched.print });
+
+// plot only those slices
+~model.plot(~pitched, \pca);
+
+// keep only loudness and pitch columns of the selection
+~lp = ~model.subset(~pitched, [\loudness, \pitch], { ~lp.print });
+
+// sort the selection by pitch and play it as a melody
+(
+~model.sort(~pitched, \pitch, \asc, nil, { |result|
+	~melody = result;
+	result.do { |e| "% % Hz".format(e.key, e.pitch.round(0.1)).postln };
+});
+)
+(
+Routine {
+	~melody.do { |e|
+		~playSlice.(e.key.asSymbol);
+		0.25.wait;
+	};
+}.play;
+)
+
+// brightest slices first, from the spectralShape dataset alone
+~model.sort(~model.datasets[\spectralShape], \centroid, \desc, \spectralShape, { |r| r[0..4].do(_.postln) });
+::
+
+Making new buffers from a selection:
+
+code::
+// the 8 loudest slices joined into one buffer, looped
+(
+~model.sort(~model.datasets[\loudness], \loudness, \desc, \loudness, { |result|
+	var keys = result[0..7].collect { |e| e.key.asSymbol };
+	~model.combineSlices(keys, { |combined|
+		~combined = combined;
+		~combinedLoop = { PlayBuf.ar(2, combined.buffer, BufRateScale.kr(combined.buffer), loop: 1) * 0.3 }.play;
+	});
+});
+)
+~combined.slices;   // where each slice landed in the new buffer
+~combinedLoop.free;
+
+// one slice in a buffer of its own
+~sliceBuf = ~model.getBufSlice(10, { |b| b.postln });
+::
+
+Using the NMF templates learnt from the corpus:
+
+code::
+// split the corpus into the 8 templates, one per output pair, and listen to each
+(
+~nmf = {
+	var src = PlayBuf.ar(1, ~model.mono, BufRateScale.kr(~model.mono), loop: 1);
+	var parts = FluidNMFFilter.ar(src, ~model.nmf_bases, 8);
+	Select.ar(MouseX.kr(0, 8).floor, parts).dup * 0.5
+}.play;
+)
+~nmf.free;
+::
+
+All descriptors in the language:
+
+code::
+~data = ~model.export;   // wait for "exporting merged" to be posted
+~data.size;
+~data[10].keys;
+~data[10][\loudness];
+~data.collect(_.chromaClass).asBag.contents; // chroma bin -> number of slices
+::
+
+Storing and loading:
+
+code::
+~model.store("~/fluidmodels/flucoma".standardizePath);
+
+// later, maybe in another session
+(
+s.waitForBoot {
+	~model = FluidModel(\flucoma);
+	~model.load("~/fluidmodels/flucoma".standardizePath);
+};
+)
+::

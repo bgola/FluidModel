@@ -1,0 +1,74 @@
+TITLE:: FluidLoadStore
+summary:: Save and restore the loader information of a FluidModel
+categories:: Libraries>FluidModel
+related:: Classes/FluidModel, Classes/FluidLoadFolder, Classes/FluidLoadMultiple
+
+DESCRIPTION::
+link::Classes/FluidModel#-store:: and link::Classes/FluidModel#-load:: use FluidLoadStore to save which files a corpus was made of and where each one sits in the joined buffer. After loading, a FluidLoadStore stands in for the original link::Classes/FluidLoadFolder:: or link::Classes/FluidLoadMultiple:: as the model's link::Classes/FluidModel#-loader::: it answers the same code::files::, code::index:: and code::buffer:: messages.
+
+You normally do not use this class directly.
+
+CLASSMETHODS::
+
+METHOD:: new
+ARGUMENT:: files
+An Array of sound file paths. They are opened to read their headers, so they must still exist.
+
+ARGUMENT:: index
+An index dictionary as made by link::Classes/FluidLoadFolder:: (see link::Classes/FluidLoadMultiple#-index::).
+
+ARGUMENT:: buffer
+The joined link::Classes/Buffer::.
+
+returns:: A FluidLoadStore.
+
+METHOD:: store
+Write a loader's file list (code::loader_files_<name>.scd::), index (code::loader_index_<name>.scd::) and buffer (code::loader_buffer_<name>.aiff::) to a folder.
+
+ARGUMENT:: loader
+A link::Classes/FluidLoadFolder::, link::Classes/FluidLoadMultiple:: or FluidLoadStore.
+
+ARGUMENT:: path
+An existing folder.
+
+ARGUMENT:: name
+The name used in the file names (the model's key).
+
+METHOD:: load
+Read the files written by link::#*store::. The buffer is read from code::<name>.aiff::, the corpus file written by link::Classes/FluidModel#-store::.
+
+ARGUMENT:: path
+The folder.
+
+ARGUMENT:: name
+The name used when storing.
+
+returns:: A FluidLoadStore.
+
+INSTANCEMETHODS::
+
+METHOD:: files
+An Array of link::Classes/SoundFile::s (headers only) for the original files.
+
+METHOD:: index
+The index dictionary: file name -> code::(bounds: [startFrame, endFrame], numchans: ..., sr: ..., path: ...)::.
+
+METHOD:: buffer
+The joined link::Classes/Buffer::.
+
+EXAMPLES::
+
+code::
+// after ~model.store(path) and ~model.load(path), see FluidModel
+~model.loader;                         // a FluidLoadStore
+~model.loader.files.collect(_.path);   // the original sound files
+~model.loader.index.keysValuesDo { |name, entry| [name, entry[\bounds]].postln };
+
+// which file and time a slice comes from
+(
+var info = ~model.getSlice(10);
+var file = ~model.loader.files[info[4].asInteger];
+var start = ~model.loader.index[file.path.basename.asSymbol][\bounds][0];
+"% at % s".format(file.path.basename, (info[1] - start) / file.sampleRate).postln;
+)
+::

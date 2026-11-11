@@ -1,0 +1,11 @@
+INSTANCEMETHODS::
+
+METHOD:: skeys
+(Added by the FluidModel quark.) Return the keys as a sorted link::Classes/Array::. If the keys cannot be compared with each other (for example Symbols mixed with numbers), they are returned unsorted.
+
+returns:: An link::Classes/Array::.
+
+discussion::
+code::
+(b: 2, c: 3, a: 1).skeys;   // -> [ a, b, c ]
+::

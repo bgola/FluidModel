@@ -1,0 +1,82 @@
+TITLE:: FluiditySimplePlayer
+summary:: Play a FluidModel slice with a simple envelope
+categories:: Libraries>FluidModel
+related:: Classes/FluidModel
+
+DESCRIPTION::
+FluiditySimplePlayer holds envelope settings and makes a function that plays one slice of a link::Classes/FluidModel:: from its link::Classes/FluidModel#-buffer::, mixed to stereo with link::Classes/Splay::, on output bus 0. link::Classes/FluidModel#-play:: uses one with the default settings (no fade in or out).
+
+The envelope lasts exactly one slice. Attack and release are given as fractions of the slice duration, so the same settings fit short and long slices.
+
+CLASSMETHODS::
+
+METHOD:: new
+returns:: A FluiditySimplePlayer with code::atk = 0, rls = 0, catk = 0, crls = 0, amp = 1::.
+
+INSTANCEMETHODS::
+
+METHOD:: get
+Make the play function.
+
+returns:: A link::Classes/Function:: code::{ |corpus, slice, loop = false| ... }:: that plays code::slice:: (an identifier such as code::'drums-12'::) of the link::Classes/FluidModel:: code::corpus:: and returns the link::Classes/Synth::. The envelope settings are read when the function is called. With code::loop:: code::false:: the synth frees itself after one slice. With code::loop:: code::true:: it restarts the slice and its envelope forever, until you free it.
+
+METHOD:: atk
+Attack time as a fraction of the slice duration (0 to 1).
+
+METHOD:: rls
+Release time as a fraction of the slice duration. code::atk + rls:: should not exceed 1.
+
+METHOD:: catk
+Curvature of the attack segment (see link::Classes/Env::).
+
+METHOD:: crls
+Curvature of the release segment.
+
+METHOD:: amp
+Output gain.
+
+METHOD:: rand
+Pick random values for code::atk::, code::rls::, code::catk:: and code::crls:: (code::amp:: is kept).
+
+EXAMPLES::
+
+code::
+// needs a built or loaded FluidModel, see its help file
+~model = FluidModel(\flucoma);
+
+(
+~player = FluiditySimplePlayer().atk_(0.05).rls_(0.6).crls_(-4).amp_(0.5);
+~play = ~player.get;
+)
+
+~play.(~model, 'flucoma-10');
+
+// loop a slice, then stop it
+~loop = ~play.(~model, 'flucoma-10', true);
+~loop.free;
+
+// a random envelope for every slice
+(
+Routine {
+	20.do {
+		var slice = ~model.slice_cache.keys.choose;
+		~player.rand;
+		~play.(~model, slice);
+		0.3.wait;
+	};
+}.play;
+)
+
+// play the slice under the mouse in a plot, one slice at a time:
+// the function returns the Synth, so the previous one can be stopped
+(
+var last, synth;
+~model.plot(\mfcc, action: { |model, slice|
+	if (slice != last) {
+		last = slice;
+		if (synth.notNil and: { synth.isPlaying }) { synth.free };
+		synth = ~play.(model, slice).register(true); // register: keep isPlaying up to date
+	};
+});
+)
+::
