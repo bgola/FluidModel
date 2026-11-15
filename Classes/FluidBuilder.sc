@@ -55,7 +55,7 @@ FluidModel {
 	*load { arg path, loadAudioBuffers=true;
 		var config = File.new(path +/+ "config.fluidity", "r");
 		var name = config.readAllString.stripWhiteSpace;
-		var model = FluidModel(name.asSymbol);
+		var model = FluidModel(name);
 		model.load(path, loadAudioBuffers);
 		^model;
 	}
@@ -72,7 +72,7 @@ FluidModel {
 
 	loadFolder {|folder|
 		var c = Condition.new;
-		loader = FluidLoadFolder(folder);
+		loader = FluidityLoadFolder(folder);
 
 		loader.play(s,{
 			c.test = true;
@@ -174,13 +174,13 @@ FluidModel {
 		};
 
 		"Slicing...".postln;
-		this.slicer.slice(mono, indices, action: action);
+		this.slicer.slice(mono, indices, this.loader, action: action);
 		c.wait;
 		^indices;
 	}
 
-	play { arg slice;
-		var player = FluiditySimplePlayer();
+	play { arg slice, plyer=nil;
+		var player = plyer ?? { FluiditySimplePlayer() };
 		var func = player.get;
 		func.(this, slice);
 	}
@@ -290,10 +290,11 @@ FluidModel {
 		dss[\slice_info].addPoint("%-%".format(key, slice_index), buf);
 	}
 
-	calculateNMF { arg sample_duration, nbases, action, iterations=200;
-		this.sampleCorpus(sample_duration, {|buf|
+	calculateNMF { arg sample_duration, nbases, num_threads=1, action, iterations=200;
+		this.sampleCorpus(sample_duration, num_threads, {|buf|
 			nmf_bases = Buffer(s);
 			FluidBufNMF.processBlocking(s, buf, 0, -1, 0, -1, -1, 0, nmf_bases, 0, components: nbases, iterations: iterations, action: action);
+			"    NMF done".postln;
 		});
 	}
 
@@ -346,7 +347,7 @@ FluidModel {
 					num_frames = end_frame - start_frame;
 
 					while { current_file.notNil and: { found.not } } {
-						var current = current_file.path.basename.asSymbol;
+						var current = current_file.path.asSymbol;
 						if (start_frame < loader.index[current][\bounds][1]) {
 							found = true;
 						};
@@ -544,7 +545,9 @@ FluidModel {
 					redux.find([x,y], action);
 				});
 
-				if (upAction.notNil) { plotter.userView.mouseUpAction = plotter.userView.mouseUpAction.addFunc(upAction) };
+				if (upAction.isNil) { upAction = {} };
+
+				plotter.userView.mouseUpAction_(upAction);
 				ret[\plotter] = plotter;
 
                  forkIfNeeded {
@@ -579,15 +582,15 @@ FluidModel {
 
 		# col, condition, value = queries[0].split($ );
 		col = columns.indexOf(col.asSymbol);
-		fquery.filter(col, condition.asSymbol, value.asFloat);
+		fquery.filter(col, condition.asSymbol, value.asNumberIfPossible);
 		queries[1..].do {|query|
 			var or;
 			# or, col, condition, value = query.split($ );
 			col = columns.indexOf(col.asSymbol);
 			if (or.toLower == "or") {
-				fquery.or(col, condition.asSymbol, value.asFloat);
+				fquery.or(col, condition.asSymbol, value.asNumberIfPossible);
 			} {
-				fquery.and(col, condition.asSymbol, value.asFloat);
+				fquery.and(col, condition.asSymbol, value.asNumberIfPossible);
 			}
 		};
 		fquery.transform(srcDataset, ds, action);
@@ -641,32 +644,61 @@ FluidModel {
 		^ret;
 	}
 
-	sampleCorpus { arg duration, action;
+	sampleCorpus { arg duration, num_threads=1, action;
 		var durationInSamples = this.mono.sampleRate * duration;
 		var totalSamples = this.mono.numFrames;
 		var percentage = durationInSamples / totalSamples;
 		var counter = 0;
 		var buffer = Buffer.alloc(s,durationInSamples,1);
+		var frame_sum = 0;
+		var frames_info = this.loader.files.collect{ |file,i|
+			var bounds = this.loader.index[file.path.asSymbol][\bounds];
+			var numframes = file.numFrames;
+			var sampleStartFrame = (bounds[0] + file.numFrames/2) - (numframes/2);
+			//var result = bounds ++ [numframes, sampleStartFrame, frame_sum];
+			var result = [frame_sum, sampleStartFrame, numframes];
+			frame_sum = frame_sum + numframes;
+			result;
+		};
+		var threads = {Condition(false)} ! num_threads;
+		var files_per_thread = (frames_info.size / num_threads).ceil.asInteger;
+
+		threads.do {|cond,i|
+			fork {
+				frames_info[(i*num_threads)..(i*num_threads)+files_per_thread-1].do {|info,j|
+					this.mono.copyData(buffer, info[0], info[1], info[2]);
+					//((i*num_threads) + j).postln;
+					buffer.updateInfo;
+					s.sync;
+				};
+				cond.test = true;
+				cond.signal;
+			};
+		};
+
+		forkIfNeeded {
+			threads.do {|cond|
+				cond.wait;
+			};
+			action !? action.value(buffer);
+		};
+
+		/*
 		forkIfNeeded {
 			var frame_sum = 0;
 			s.sync;
 			buffer.updateInfo;
 			s.sync;
-			this.loader.files.do {|file,i|
-				var identifier = file.path.basename.asSymbol;
-				var numframes = file.numFrames * percentage;
-				var startframe = this.loader.index[identifier][\bounds][0];
-				var sampleStartFrame = (startframe + file.numFrames/2) - (numframes/2);
-
-				this.mono.copyData(buffer, frame_sum, sampleStartFrame, numframes);
-				s.sync;
+			frames_info.do {|info,i|
+				i.postln;
+				this.mono.copyData(buffer, info[0], info[1], info[2]);
 				buffer.updateInfo;
 				s.sync;
-				counter = counter + 1;
-				frame_sum = frame_sum + numframes;
-				if(counter == (this.loader.files.size)) {action !? action.value(buffer)};
 			};
+			action !? action.value(buffer);
+
 		};
+		*/
 		^buffer;
 	}
 
@@ -753,9 +785,7 @@ FluidModel {
 				if (PathName(files).isFolder) {
 					buffer = this.loadFolder(files);
 				} {
-					var single = Buffer.read(s, files);
-					s.sync;
-					buffer = this.loadMultiple([single]);
+					buffer = this.loadSingleFile(files);
 				};
 			} {
 				buffer = this.loadMultiple(files);
@@ -787,11 +817,13 @@ FluidModel {
 			//scaled_dataset = scaler_tree[2];
 			//lookup = this.makeLookup;
 			"Calculating NMF...".postln;
-			this.calculateNMF(60, 8, {action.(this)});
+			this.calculateNMF(60, 8, num_threads, {action.(this)});
 
 			//if (action.notNil) {
 			//	action.(this);
 			//};
+			"Finalizing...".postln;
+			s.sync;
 			"Done with building the model".postln;
 		}
 	}
@@ -892,15 +924,32 @@ FluidModelComposer {
 		this.prMergeModels;
 	}
 
-	plot { arg dataset, algo=\pca, grid=1, action, neighbors=1;
-		^this.model.plot(dataset, algo, grid, neighbors, action);
+	plot { arg dataset, algo=\pca, grid=1, action;
+		^this.model.plot(dataset, algo, grid, action);
 	}
 
-	reduceDimension { arg n, algo=\pca, dataset=nil, grid=0, action, neighbors=1;
-		^this.model.reduceDimension(n, algo, dataset, grid, neighbors, action);
+	reduceDimension { arg n, algo=\pca, dataset=nil, grid=0, action;
+		^this.model.reduceDimension(n, algo=\pca, dataset, grid=0, action);
 	}
 }
 
+
+FluidModelBufFileSlice {
+	*process { arg server, source, startFrame=0, numFrames= -1, startChan=0, numChans= -1, indices=nil, loader=nil, freeWhenDone=true, action=nil;
+		indices.numChannels = 1;
+		indices.numFrames = loader.index.values.size;
+		"Loader has % file indices".format(indices.numFrames).postln;
+		indices.alloc();
+		fork {
+			server.sync;
+			loader.index.values.sort({|a,b| a[\bounds][0] < b[\bounds][0] }).do {|slice, i|
+				indices.set(i, slice[\bounds][0]);
+			};
+			server.sync;
+			action.(indices);
+		}
+	}
+}
 
 FluidModelSlicer {
 	var slicerClass, slicerArguments;
@@ -910,7 +959,11 @@ FluidModelSlicer {
 	}
 
 	*default {
-		^this.novelty();
+		^this.files();
+	}
+
+	*files {
+		^this.new(FluidModelBufFileSlice);
 	}
 
 	*novelty { arg algorithm=0, kernelSize=15, threshold=0.25, filterSize=1,
@@ -945,10 +998,15 @@ FluidModelSlicer {
 		);
 	}
 
-	slice { arg source, indices, action;
-		// args is: [server, source, startFrame, numFrames, startChan, numChans, SLICER ARGS, freeWhenDone, action]
-		var args = [Server.default, source, 0, -1, 0, -1, indices] ++ slicerArguments ++ [true, action];
-		^slicerClass.process(*args);
+	slice { arg source, indices, loader=nil, action=nil;
+		// args is: [server, source, startFrame, numFrames, startChan, numChans, indices, SLICER ARGS, freeWhenDone, action]
+		var args;
+		loader.postln;
+		if (slicerClass == FluidModelBufFileSlice) {
+			slicerArguments = loader.postln;
+		};
+		args = [Server.default, source, 0, -1, 0, -1, indices] ++ slicerArguments ++ [true, action];
+		slicerClass.process(*args);
 	}
 }
 
@@ -958,7 +1016,7 @@ FluidModelAnalyser {
 }
 
 FluiditySimplePlayer {
-	var <>atk=0, <>rls=0, <>catk=0, <>crls=0, <>amp=1;
+	var <>atk=0, <>rls=0, <>catk=0, <>crls=0, <>amp=1, <>rate=1;
 
 	*new {
 		^super.newCopyArgs();
@@ -968,12 +1026,13 @@ FluiditySimplePlayer {
 		^{ arg corpus, slice, loop=false;
 			var info = corpus.slice_cache[slice.asSymbol];
 			{
-				var dur = info[0]/corpus.mono.sampleRate;
-				var trig = Impulse.kr(dur.reciprocal);
+				var dur = info[0]/corpus.mono.sampleRate / rate;
+
 				var loopv = if (loop) { 0 } { 2 };
+				var trig = Impulse.kr(dur.reciprocal & loopv);
 				Splay.ar(
-					PlayBuf.ar(corpus.buffer.numChannels, corpus.buffer, 1, trig, info[1]) *
-					Env.new([0,1,1,0], [atk,1-(atk + rls),rls], [catk, 1, crls]).ar(loopv, if (loop) { trig } { 1 }, dur),
+					PlayBuf.ar(corpus.buffer.numChannels, corpus.buffer, rate, trig, info[1]) *
+					Env.new([0,1,1,0], [atk,1-(atk + rls),rls], [catk, 1, crls]).ar(loopv, trig, dur),
 					1
 				) * amp
 			}.play
@@ -1036,7 +1095,7 @@ FluidLoadMultiple {
 		counter = 0;
 		index = IdentityDictionary();
 		forkIfNeeded{
-			buffer = Buffer.alloc(server, sizes.reduce('+'), maxChan);
+			buffer = Buffer.alloc(server, sizes.reduce('+'), maxChan, sampleRate: server.sampleRate);
 
 			server.sync;
 			buffer.updateInfo;
@@ -1058,6 +1117,66 @@ FluidLoadMultiple {
 				index.add(identifier->entry);
 				counter = counter + 1;
 				if(counter == (files.size)) {action !? action.value(index)};
+			}
+		};
+	}
+}
+
+
+// adapted from FluCoMa, but does it recursively
+FluidityLoadFolder {
+	var  path, idFunc,channelFunc;
+	var < files;
+	var < index;
+	var < buffer;
+
+	*new{ |path, idFunc, channelFunc |
+		^super.newCopyArgs(path, idFunc,channelFunc);
+	}
+
+	play { |server, action|
+		var sizes,channels,maxChan, startEnd,counter;
+		var findAllSoundFiles = {|path|
+			path.folders.collect {|folder|
+				findAllSoundFiles.(folder);
+			}.flatten ++ SoundFile.collect(path +/+ "*");
+		};
+		server ?? {server = Server.default};
+		files = findAllSoundFiles.(PathName(path));
+		"Loaded % files".format(files.size).postln;
+		//files = SoundFile.collect(path +/+ '*');
+		sizes = files.collect{|f|f.numFrames()};
+		channels = files.collect{|f| f.numChannels()};
+		startEnd = sizes.inject([0],{|a,b| a ++ (b + a[a.size - 1])}).slide(2).clump(2);
+		maxChan = channels[channels.maxIndex];
+		counter = 0;
+		index = IdentityDictionary();
+		forkIfNeeded{
+			buffer = Buffer.alloc(server,sizes.reduce('+'),maxChan, sampleRate: server.sampleRate);
+			server.sync;
+			buffer.updateInfo;
+			buffer.query;
+			server.sync;
+			this.files.do{|f,i|
+				var channelMap,identifier,entry;
+				OSCFunc({
+					if(idFunc.notNil)
+					{ identifier = idFunc.value(path,i) }
+					{ identifier = f.path.asSymbol };
+					//{ identifier = ("%_%".format(i, f.path.basename)).asSymbol };
+					entry = IdentityDictionary();
+					entry.add(\bounds->startEnd[i]);
+					entry.add(\numchans->f.numChannels);
+					entry.add(\sr->f.sampleRate);
+					entry.add(\path->f.path);
+					index.add(identifier->entry);
+					counter = counter + 1;
+					if(counter == (files.size)) {action !? action.value(index)};
+				},"/done",server.addr,argTemplate:["/b_readChannel"]).oneShot;
+				if(channelFunc.notNil)
+				{  channelMap = channelFunc.value(channels[i],maxChan,i) }
+				{  channelMap = Array.series(channels[i]) ++ -1.dup(maxChan - channels[i])}; //using -1 as a silence channel ID to fill the blanks (see SC_BufReadCommand::CopyChannels)
+				buffer.readChannel(f.path,bufStartFrame:startEnd[i][0], channels:channelMap);
 			}
 		};
 	}
