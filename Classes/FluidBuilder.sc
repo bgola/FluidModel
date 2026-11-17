@@ -1002,7 +1002,7 @@ FluidModelSlicer {
 		// args is: [server, source, startFrame, numFrames, startChan, numChans, indices, SLICER ARGS, freeWhenDone, action]
 		var args;
 		loader.postln;
-		if (slicerClass == FluidModelBufFileSlice) {
+		if (slicerClass == FluidModelFilesSlice) {
 			slicerArguments = loader.postln;
 		};
 		args = [Server.default, source, 0, -1, 0, -1, indices] ++ slicerArguments ++ [true, action];
