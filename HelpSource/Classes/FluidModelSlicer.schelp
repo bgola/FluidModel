@@ -4,7 +4,7 @@ categories:: Libraries>FluidModel
 related:: Classes/FluidModel, Classes/FluidBufNoveltySlice, Classes/FluidBufOnsetSlice, Classes/FluidBufAmpSlice, Classes/FluidBufTransientSlice
 
 DESCRIPTION::
-A FluidModelSlicer stores a FluCoMa buffer slicer together with its settings, so that a link::Classes/FluidModel:: can slice its corpus with it later. The class methods code::novelty::, code::onset::, code::amp:: and code::transient:: take the same arguments, with the same defaults, as the code::process:: methods of the matching FluCoMa classes; see their help files for what each argument does.
+A FluidModelSlicer stores a FluCoMa buffer slicer together with its settings, so that a link::Classes/FluidModel:: can slice its corpus with it later. The class methods code::files::, code::novelty::, code::onset::, code::amp:: and code::transient:: take the same arguments, with the same defaults, as the code::process:: methods of the matching FluCoMa classes; see their help files for what each argument does.
 
 Set it on a model before calling link::Classes/FluidModel#-build:::
 
@@ -29,9 +29,12 @@ An Array of emphasis::all:: the settings that follow code::indices::, in order. 
 returns:: A FluidModelSlicer.
 
 METHOD:: default
-The slicer a new link::Classes/FluidModel:: uses: code::novelty():: with its defaults.
+The slicer a new link::Classes/FluidModel:: uses: code::files():: with its defaults.
 
 returns:: A FluidModelSlicer.
+
+METHOD:: files
+Uses the original files as slices (for when a folder of many samples is loaded for example), it uses link::Classes/FluidModelFileSlice::.
 
 METHOD:: novelty
 Slice where the sound changes, with link::Classes/FluidBufNoveltySlice::.
@@ -165,6 +168,9 @@ The link::Classes/Buffer:: to slice (link::Classes/FluidModel:: passes its mono 
 
 ARGUMENT:: indices
 A link::Classes/Buffer:: that receives the slice points, in frames.
+
+ARGUMENT:: loader
+A link::Classes/FluidLoadFolder:: with the files loaded by the FluidModel.
 
 ARGUMENT:: action
 Called when slicing is done, with the code::indices:: buffer.

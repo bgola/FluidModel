@@ -367,7 +367,7 @@ FluidModel {
 					this.chainDuration(buffers[thread].duration, num_frames, slice_index, datasets);
 					this.chainSliceInfo(buffers[thread].slice_info, start_frame, end_frame, num_frames, slice_index, current_file_idx, datasets);
 
-					labelset.addLabel("%-%".format(key, slice_index), current_file.path.basename.asSymbol);
+					labelset.addLabel("%-%".format(key, slice_index), current_file.path.asSymbol);
 					s.sync;
 
 					datasets[\slice_info].size({|size|
@@ -486,7 +486,7 @@ FluidModel {
 						} {
 							var slice_info = slice_cache[slice.asSymbol];
 							var file = model.loader.files[slice_info[4].asInteger];
-							var bounds = model.loader.index[file.path.basename.asSymbol][\bounds];
+							var bounds = model.loader.index[file.path.asSymbol][\bounds];
 
 							"Slice from file % starting at second % lasting for % seconds".format(
 								file.path,
@@ -934,7 +934,7 @@ FluidModelComposer {
 }
 
 
-FluidModelBufFileSlice {
+FluidModelFilesSlice {
 	*process { arg server, source, startFrame=0, numFrames= -1, startChan=0, numChans= -1, indices=nil, loader=nil, freeWhenDone=true, action=nil;
 		indices.numChannels = 1;
 		indices.numFrames = loader.index.values.size;
@@ -963,7 +963,7 @@ FluidModelSlicer {
 	}
 
 	*files {
-		^this.new(FluidModelBufFileSlice);
+		^this.new(FluidModelFilesSlice);
 	}
 
 	*novelty { arg algorithm=0, kernelSize=15, threshold=0.25, filterSize=1,
@@ -1027,9 +1027,8 @@ FluiditySimplePlayer {
 			var info = corpus.slice_cache[slice.asSymbol];
 			{
 				var dur = info[0]/corpus.mono.sampleRate / rate;
-
-				var loopv = if (loop) { 0 } { 2 };
-				var trig = Impulse.kr(dur.reciprocal & loopv);
+				var loopv = DC.kr(if (loop) { 0 } { 2 });
+				var trig = Impulse.kr(dur.reciprocal & (loopv));
 				Splay.ar(
 					PlayBuf.ar(corpus.buffer.numChannels, corpus.buffer, rate, trig, info[1]) *
 					Env.new([0,1,1,0], [atk,1-(atk + rls),rls], [catk, 1, crls]).ar(loopv, trig, dur),
@@ -1108,7 +1107,7 @@ FluidLoadMultiple {
 				server.sync;
 				buffer.updateInfo;
 				server.sync;
-				identifier = (f.path.basename).asSymbol;
+				identifier = (f.path).asSymbol;
 				entry = IdentityDictionary();
 				entry.add(\bounds->startEnd[i]);
 				entry.add(\numchans->f.numChannels);
