@@ -724,6 +724,11 @@ FluidModel {
 		^buffer;
 	}
 
+	getFileForSlice { arg slice, action=nil;
+		var slice_name = if (slice.isNumber) { "%-%".format(key, slice).asSymbol } { slice };
+		this.labelset.getLabel(slice_name, {|file| file.postln; action !? action.value(file) });
+	}
+
 	export {
 		var nslices = slices.numFrames-1;
 		var slices_export = nil!nslices;
