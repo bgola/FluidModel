@@ -54,7 +54,7 @@ FluidModel {
 
 	*load { arg path, loadAudioBuffers=true;
 		var config = File.new(path +/+ "config.fluidity", "r");
-		var name = config.readAllString.stripWhiteSpace;
+		var name = config.readAllString.stripWhiteSpace.asSymbol;
 		var model = FluidModel(name);
 		model.load(path, loadAudioBuffers);
 		^model;
@@ -659,7 +659,7 @@ FluidModel {
 			ret.result = [];
 			dic["data"].keysValuesDo {|k,v|
 				var obj = ();
-				obj.key = k;
+				obj.key = k.asSymbol;
 				shape.collect {|feat, idx|
 					obj[feat] = v[idx]
 				};
