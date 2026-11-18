@@ -598,21 +598,30 @@ FluidModel {
 		var ds = FluidDataSet(s);
 		var columns;
 		var col, condition, value;
+		var asNumber = {|v|
+			var res;
+			if(v.couldBeNumber && (v != "-") ) {
+				res = v.interpret;
+			} {
+				res = v;
+			};
+			res
+		};
 		srcDataset = srcDataset ? datasets[\merged];
 		columns = FluidModel.queryFeatures[\merged];
 		fquery.addRange(0, columns.size);
 
 		# col, condition, value = queries[0].split($ );
 		col = columns.indexOf(col.asSymbol);
-		fquery.filter(col, condition.asSymbol, value.asNumberIfPossible);
+		fquery.filter(col, condition.asSymbol, asNumber.(value));
 		queries[1..].do {|query|
 			var or;
 			# or, col, condition, value = query.split($ );
 			col = columns.indexOf(col.asSymbol);
 			if (or.toLower == "or") {
-				fquery.or(col, condition.asSymbol, value.asNumberIfPossible);
+				fquery.or(col, condition.asSymbol, asNumber.(value));
 			} {
-				fquery.and(col, condition.asSymbol, value.asNumberIfPossible);
+				fquery.and(col, condition.asSymbol, asNumber.(value));
 			}
 		};
 		fquery.transform(srcDataset, ds, action);
