@@ -231,6 +231,26 @@ FluidModel {
 		];
 	}
 
+	playSlice { arg slice, atk=0.01, rls=0.05, amp=1;
+		var info = this.getSlice(slice);
+		forkIfNeeded {
+			var c = Condition.new;
+			var buf, dur;
+			buf = this.getBufSlice(slice, { c.test = true; c.signal; });
+			c.wait;
+			dur = info[0] / buf.sampleRate;
+			{
+				Splay.ar(
+					PlayBuf.ar(buf.numChannels, buf, 1, 1, 0, 0) *
+					Env.linen(atk, (dur - (atk + rls)).max(0), rls).ar(2)
+				) * amp;
+			}.play;
+			(dur*1.1).wait;
+			buf.free;
+		};
+		^info;
+	}
+
 	chainFlatten { arg buf, ds, slice_index;
 		var stats = Buffer(s);
 		var flat = Buffer(s);
@@ -435,6 +455,8 @@ FluidModel {
 
 		FluidNormalize(s).fitTransform(dataset, reduxds);
 
+		ret[\algo] = algo;
+
 		if (algo == \pca) {
 			ret[\algo] = FluidPCA(s, n);
 		};
@@ -550,21 +572,21 @@ FluidModel {
 				plotter.userView.mouseUpAction_(upAction);
 				ret[\plotter] = plotter;
 
-                 forkIfNeeded {
-                     s.sync;
-			        labelset.dump({|dic|
-				        var colors = dic["data"].values.asSet.asList.collect {|v, idx| [v[0].asSymbol, idx] }.flatten.asDict;
-				        var colorsn = colors.size;
-				        dic["data"].keysValuesDo {|k,v|
-					        var cols = colors[v[0].asSymbol];
-     					    var cola = (cols * 3) % colorsn / colorsn;
-	     				    var colb = (cols * 4) % colorsn / colorsn;
-		    			        var colc = (cols * 5) % colorsn / colorsn;
-					        var color = Color.hsv(cola, colb.linlin(0,1,0.5,1.0), colc.linlin(0,1,0.5,1), 0.7);
-					        plotter.pointColor_(k, color);
-				        };
-			        });
-		        };
+				forkIfNeeded {
+					s.sync;
+					labelset.dump({|dic|
+						var colors = dic["data"].values.asSet.asList.collect {|v, idx| [v[0].asSymbol, idx] }.flatten.asDict;
+						var colorsn = colors.size;
+						dic["data"].keysValuesDo {|k,v|
+							var cols = colors[v[0].asSymbol];
+							var cola = (cols * 3) % colorsn / colorsn;
+							var colb = (cols * 4) % colorsn / colorsn;
+							var colc = (cols * 5) % colorsn / colorsn;
+							var color = Color.hsv(cola, colb.linlin(0,1,0.5,1.0), colc.linlin(0,1,0.5,1), 0.7);
+							plotter.pointColor_(k, color);
+						};
+					});
+				};
 			}});
 		});
 
